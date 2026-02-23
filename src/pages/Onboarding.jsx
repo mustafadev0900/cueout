@@ -114,11 +114,15 @@ export default function Onboarding() {
     if (currentSlide < slides.length - 1) {
       setCurrentSlide(currentSlide + 1);
     } else {
+      // Mark onboarding as complete
+      localStorage.setItem('onboardingComplete', 'true');
       navigate(createPageUrl('Auth'));
     }
   };
 
   const handleSkip = () => {
+    // Mark onboarding as complete
+    localStorage.setItem('onboardingComplete', 'true');
     navigate(createPageUrl('Auth'));
   };
 

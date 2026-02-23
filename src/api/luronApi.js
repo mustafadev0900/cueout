@@ -256,6 +256,8 @@ export async function getHistory(userId, filters = {}) {
  */
 export async function getCallDetails(callId) {
   try {
+    console.log('🔍 Fetching call details for:', callId);
+
     const response = await fetch(`${BASE_URL}/history/${callId}`, {
       method: 'GET',
       headers: {
@@ -271,6 +273,11 @@ export async function getCallDetails(callId) {
       }
       throw new Error(data.message || 'Failed to fetch call details.');
     }
+
+    // Log the full response to see what's available
+    console.log('📞 Call Details:', JSON.stringify(data, null, 2));
+    console.log('💬 Call Context (conversation):', data.data?.call_context);
+    console.log('📊 Full Call Data:', data.data);
 
     return {
       success: true,
@@ -385,4 +392,11 @@ export function getUserId() {
   }
 
   return userId;
+}
+
+// Expose getCallDetails to window for easy testing in browser console
+if (typeof window !== 'undefined') {
+  window.getCallDetails = getCallDetails;
+  console.log('🔧 Debug: window.getCallDetails() is available for testing');
+  console.log('Usage: window.getCallDetails("call_b5eaea4d1895")');
 }

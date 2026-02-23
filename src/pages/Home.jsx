@@ -215,6 +215,9 @@ export default function Home() {
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       topRef.current?.scrollIntoView({ behavior: 'smooth' });
+
+      // Reset the note field
+      setNote('');
     } else {
       // Create new call via Luron API with optimistic update
       try {
@@ -255,6 +258,9 @@ export default function Home() {
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
         topRef.current?.scrollIntoView({ behavior: 'smooth' });
+
+        // Reset the note field
+        setNote('');
 
         // Call Luron API in background (don't block UI)
         scheduleCallAPI({
