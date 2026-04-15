@@ -9,8 +9,9 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
   const [isCompleted, setIsCompleted] = useState(false);
 
   const calculateTimeLeft = () => {
-    if (!call.dueTimestamp) return 0;
-    const diff = Math.max(0, Math.ceil((call.dueTimestamp - Date.now()) / 1000));
+    const ts = call.due_timestamp || call.dueTimestamp;
+    if (!ts) return 0;
+    const diff = Math.max(0, Math.ceil((new Date(ts).getTime() - Date.now()) / 1000));
     return diff;
   };
 
@@ -40,7 +41,7 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [call.dueTimestamp, isCompleted]);
+  }, [call.due_timestamp, call.dueTimestamp, isCompleted]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -49,12 +50,11 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
   };
 
   const getActionLabel = () => {
-    const methods = call.originalState?.contactMethods || ['call'];
+    const methods = call.contact_methods || call.contactMethods || call.originalState?.contactMethods || ['call'];
     const types = [];
     if (methods.includes('call')) types.push('call');
     if (methods.includes('text')) types.push('text');
     if (methods.includes('email')) types.push('email');
-    
     const actionText = types.join(' & ');
     return `Next ${actionText}`;
   };
@@ -78,13 +78,13 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
       className="mb-4"
     >
       <motion.div
-        animate={call.isNew ? {
+        animate={(call.is_new || call.isNew) ? {
           borderColor: ["rgba(239, 68, 68, 0.5)", "rgba(74, 222, 128, 1)", "rgba(239, 68, 68, 0.5)"],
           boxShadow: ["0 0 0px rgba(74, 222, 128, 0)", "0 0 30px rgba(74, 222, 128, 0.4)", "0 0 0px rgba(74, 222, 128, 0)"]
         } : {}}
         transition={{ duration: 1.2, repeat: 2, ease: "easeInOut" }}
         onAnimationComplete={() => {
-          if (call.isNew) updateUpcomingCall(call.id, { isNew: false });
+          if (call.is_new || call.isNew) updateUpcomingCall(call.id, { is_new: false });
         }}
         className={`backdrop-blur-xl border rounded-full px-4 py-2.5 shadow-lg flex items-center gap-3 transition-colors ${
           isCompleted ? 'bg-green-500/20 border-green-500/50' : 'bg-zinc-900/80 border-red-500/50'
@@ -112,7 +112,7 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
             <CheckCircle2 className="w-5 h-5 text-green-400" />
           ) : (
             <>
-              {onEdit && !call.isEditing && !showConfirmDelete && (
+              {/* {onEdit && !call.isEditing && !showConfirmDelete && (
                 <button
                   onClick={onEdit}
                   className="p-1 hover:bg-zinc-800 rounded-full transition-colors flex-shrink-0"
@@ -134,7 +134,7 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
                 ) : (
                   <X className="w-4 h-4 text-zinc-400" />
                 )}
-              </button>
+              </button> */}
             </>
           )}
         </div>

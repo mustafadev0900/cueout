@@ -86,8 +86,41 @@ const mockHistory = [
   },
 ];
 
+// Format a timestamp into "Today · 3:05 PM", "Yesterday · 4:20 PM", "Apr 12 · 2:15 PM", etc.
+function formatHistoryDate(dateInput) {
+  if (!dateInput) return '—';
+  const date = new Date(dateInput);
+  if (isNaN(date)) return '—';
+
+  const now = new Date();
+  const time = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  const isToday =
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    date.getDate() === yesterday.getDate() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getFullYear() === yesterday.getFullYear();
+
+  if (isToday)     return `Today · ${time}`;
+  if (isYesterday) return `Yesterday · ${time}`;
+
+  const isSameYear = date.getFullYear() === now.getFullYear();
+  const dateLabel = date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    ...(isSameYear ? {} : { year: 'numeric' }),
+  });
+  return `${dateLabel} · ${time}`;
+}
+
 export default function History() {
-  const { history, clearUnreadHistory, quickSchedules, updateQuickSchedule, addQuickSchedule, removeQuickSchedule, promoteQuickSchedule, refreshHistory, setIsTabBarHidden } = useApp();
+  const { history, clearUnreadHistory, quickSchedules, updateQuickSchedule, addQuickSchedule, removeQuickSchedule, promoteQuickSchedule, refreshHistory, syncPendingStatuses, setIsTabBarHidden } = useApp();
   const { personas } = usePersona();
   const [selectedCall, setSelectedCall] = useState(null);
   const [editingSchedule, setEditingSchedule] = useState(null);
@@ -109,6 +142,7 @@ export default function History() {
       setIsLoadingHistory(true);
       try {
         await refreshHistory();
+        await syncPendingStatuses();
       } catch (error) {
         console.error('Error fetching history:', error);
       } finally {
@@ -331,7 +365,7 @@ export default function History() {
                 key={call.id}
                 call={{
                   ...call,
-                  scheduledTime: new Date(call.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  scheduledTime: formatHistoryDate(call.completedAt),
                   status: call.status || 'completed',
                   duration: call.duration ? `${Math.floor(call.duration / 60)}:${(call.duration % 60).toString().padStart(2, '0')}` : '0:30',
                   personaName: call.personaName || call.persona
@@ -371,15 +405,20 @@ export default function History() {
                   <h2 className="text-2xl font-bold mb-1 text-white">{selectedCall.personaName}</h2>
                   <div className="flex items-center gap-2 text-sm text-zinc-400">
                     <Clock className="w-4 h-4" />
-                    <span>{selectedCall.scheduledTime}</span>
+                    <span>{formatHistoryDate(selectedCall.completedAt)}</span>
                   </div>
                 </div>
                 <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                  selectedCall.status === 'answered'
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-zinc-700 text-zinc-400'
+                  selectedCall.status === 'answered'  ? 'bg-green-500/20 text-green-400' :
+                  selectedCall.status === 'declined'  ? 'bg-red-500/20 text-red-400' :
+                  selectedCall.status === 'scheduled' ? 'bg-yellow-500/20 text-yellow-400' :
+                  'bg-zinc-700 text-zinc-400'
                 }`}>
-                  {selectedCall.status === 'answered' ? '✓ Answered' : '✕ Missed'}
+                  {selectedCall.status === 'answered'  ? '✓ Answered'  :
+                   selectedCall.status === 'declined'  ? '✕ Declined'  :
+                   selectedCall.status === 'scheduled' ? '⏳ Pending'  :
+                   selectedCall.status === 'missed'    ? '✕ Missed'    :
+                   '✕ Missed'}
                 </div>
               </div>
 
@@ -397,29 +436,23 @@ export default function History() {
                 <div className="flex items-center justify-between py-3 border-b border-zinc-800">
                   <span className="text-zinc-400">Scheduled</span>
                   <span className="font-semibold text-white">
-                    {selectedCall.completedAt
-                      ? new Date(selectedCall.completedAt).toLocaleString([], {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })
-                      : selectedCall.scheduledTime}
+                    {formatHistoryDate(selectedCall.completedAt) || selectedCall.scheduledTime}
                   </span>
                 </div>
                 <div className="flex items-center justify-between py-3 border-b border-zinc-800">
                   <span className="text-zinc-400">Status</span>
                   <span className={`font-semibold ${
-                    selectedCall.status === 'completed' || selectedCall.status === 'answered'
-                      ? 'text-green-400'
-                      : selectedCall.status === 'missed'
-                      ? 'text-zinc-400'
-                      : 'text-yellow-400'
+                    selectedCall.status === 'answered'  ? 'text-green-400'  :
+                    selectedCall.status === 'declined'  ? 'text-red-400'    :
+                    selectedCall.status === 'scheduled' ? 'text-yellow-400' :
+                    'text-zinc-400'
                   }`}>
-                    {selectedCall.status === 'completed' ? 'Completed' :
-                     selectedCall.status === 'answered' ? 'Answered' :
-                     selectedCall.status === 'missed' ? 'Missed' :
-                     selectedCall.status || 'Unknown'}
+                    {selectedCall.status === 'answered'  ? 'Answered'  :
+                     selectedCall.status === 'declined'  ? 'Declined'  :
+                     selectedCall.status === 'scheduled' ? 'Pending'   :
+                     selectedCall.status === 'missed'    ? 'Missed'    :
+                     selectedCall.status === 'failed'    ? 'Failed'    :
+                     'Unknown'}
                   </span>
                 </div>
               </div>

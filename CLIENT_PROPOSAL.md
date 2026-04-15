@@ -6,7 +6,7 @@ All issues have been identified, tested, and verified against the live Luron API
 ---
 
 ## Summary
-
+s
 The audit identified 30 issues grouped into four themes: account and data foundation, the core scheduling experience, history and plan management, and iOS-specific behaviour plus the monetisation system. Each phase below describes what the user currently experiences, what the problem is, and what work is needed. Backend work refers to Supabase database and server-side logic. UI work refers to the iOS app front end.
 
 **Timeline is based on one developer working 6 hours per day, 5 days per week. Each phase includes time for testing and review.**

@@ -31,8 +31,13 @@ export const updatePersona = (personaId, updates) =>
   );
 
 export const deletePersona = (personaId) =>
-  supabaseQuery(() =>
-    supabase.from('personas').delete().eq('id', personaId).eq('is_default', false)
+  withAuth((userId) =>
+    supabaseQuery(() =>
+      supabase.from('personas').delete()
+        .eq('id', personaId)
+        .eq('user_id', userId)
+        .eq('is_default', false)
+    )
   );
 
 // ─── Persona Configs ──────────────────────────────────────────────────────────

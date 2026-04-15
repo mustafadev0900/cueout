@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { App as CapacitorApp } from '@capacitor/app';
+import { supabase } from '../lib/supabase';
 import {
   signUp,
   signIn,
@@ -31,8 +33,34 @@ export function AuthProvider({ children }) {
       setIsAuthenticated(!!session);
     });
 
+    // Handle deep links (e.g. email change confirmation: cueout://?token_hash=...&type=email_change)
+    const handleAppUrl = async ({ url }) => {
+      try {
+        const parsed = new URL(url);
+        const token_hash = parsed.searchParams.get('token_hash');
+        const type = parsed.searchParams.get('type');
+        if (token_hash && type) {
+          const { error } = await supabase.auth.verifyOtp({ token_hash, type });
+          if (!error) {
+            await checkUser();
+          }
+        }
+      } catch (err) {
+        console.error('Deep link handling error:', err);
+      }
+    };
+
+    // Refresh session when app comes back to foreground (e.g. after browser email confirmation)
+    const handleAppStateChange = ({ isActive }) => {
+      if (isActive) checkUser();
+    };
+
+    CapacitorApp.addListener('appUrlOpen', handleAppUrl);
+    CapacitorApp.addListener('appStateChange', handleAppStateChange);
+
     return () => {
       subscription?.unsubscribe();
+      CapacitorApp.removeAllListeners();
     };
   }, []);
 

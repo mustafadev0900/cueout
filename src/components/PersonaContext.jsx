@@ -6,8 +6,8 @@ import {
   deletePersona as deletePersonaAPI,
   getPersonaConfigs as fetchPersonaConfigs,
   upsertPersonaConfig,
-  isAuthenticated
 } from '../api';
+import { useAuth } from './AuthContext';
 
 const PersonaContext = createContext();
 
@@ -37,38 +37,36 @@ export function PersonaProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticatedState, setIsAuthenticatedState] = useState(false);
 
-  // Load personas and configs from Supabase on mount
+  const { user } = useAuth();
+
+  // Reload whenever the signed-in user changes (covers sign-in, sign-out, user switch)
   useEffect(() => {
+    if (!user) {
+      // Signed out — reset immediately so no previous user's data leaks
+      setPersonas(defaultPersonas);
+      setPersonaConfigs(defaultPersonaConfigs);
+      setIsAuthenticatedState(false);
+      setIsLoading(false);
+      return;
+    }
     loadData();
-  }, []);
+  }, [user?.id]);
 
   const loadData = async () => {
     try {
       setIsLoading(true);
+      setIsAuthenticatedState(true);
 
-      // Check if user is authenticated
-      const authenticated = await isAuthenticated();
-      setIsAuthenticatedState(authenticated);
-
-      if (!authenticated) {
-        // Use defaults if not authenticated
-        setPersonas(defaultPersonas);
-        setPersonaConfigs(defaultPersonaConfigs);
-        setIsLoading(false);
-        return;
-      }
-
-      // Load personas and configs from Supabase
+      // Load personas and configs from Supabase for the current user
       const [personasData, configsData] = await Promise.all([
-        fetchPersonas().catch(() => defaultPersonas),
-        fetchPersonaConfigs().catch(() => defaultPersonaConfigs)
+        fetchPersonas().catch(() => []),
+        fetchPersonaConfigs().catch(() => ({}))
       ]);
 
       setPersonas(personasData.length > 0 ? personasData : defaultPersonas);
       setPersonaConfigs(Object.keys(configsData).length > 0 ? configsData : defaultPersonaConfigs);
     } catch (error) {
       console.error('Error loading personas:', error);
-      // Fallback to defaults on error
       setPersonas(defaultPersonas);
       setPersonaConfigs(defaultPersonaConfigs);
     } finally {
@@ -129,17 +127,19 @@ export function PersonaProvider({ children }) {
   };
 
   const deletePersona = async (id) => {
-    try {
-      // Delete locally first (optimistic delete)
-      setPersonas(prev => prev.filter(p => p.id !== id));
+    // Snapshot for rollback if DB delete fails
+    setPersonas(prev => {
+      return prev.filter(p => p.id !== id);
+    });
 
-      // Delete from Supabase if authenticated
-      if (isAuthenticatedState) {
+    if (isAuthenticatedState) {
+      try {
         await deletePersonaAPI(id);
+      } catch (error) {
+        console.error('Error deleting persona from DB:', error);
+        // Rollback — reload from Supabase so state matches DB
+        loadData();
       }
-    } catch (error) {
-      console.error('Error deleting persona:', error);
-      // Optimistic delete already applied
     }
   };
 

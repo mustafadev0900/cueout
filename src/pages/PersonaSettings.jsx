@@ -17,6 +17,16 @@ import ToneSelector from '../components/persona/ToneSelector';
 import BackgroundSoundSelector from '../components/persona/BackgroundSoundSelector';
 import DurationSlider from '../components/persona/DurationSlider';
 
+const luronPersonaOptions = [
+  { id: 'manager',     label: 'Manager',     icon: '💼', description: 'Professional & work-focused' },
+  { id: 'coordinator', label: 'Coordinator', icon: '📋', description: 'Organised & scheduling' },
+  { id: 'friend',      label: 'Friend',      icon: '💬', description: 'Casual & warm' },
+  { id: 'mom',         label: 'Mom',         icon: '❤️', description: 'Caring & concerned' },
+  { id: 'doctor',      label: 'Doctor',      icon: '⚕️', description: 'Medical & formal' },
+  { id: 'boss',        label: 'Boss',        icon: '👔', description: 'Authoritative & direct' },
+  { id: 'service',     label: 'Service',     icon: '🔔', description: 'Reminder & notification' },
+];
+
 const toneOptions = [
   { id: 'formal', label: 'Formal', icon: '👔', description: 'Professional and courteous' },
   { id: 'casual', label: 'Casual', icon: '😊', description: 'Relaxed and friendly' },
@@ -42,8 +52,10 @@ export default function PersonaSettings() {
   
   const initialPersona = location.state?.persona || { id: 'manager', name: 'Manager', icon: '💼' };
   
+  const isCustomPersona = !initialPersona.is_default;
   const [name, setName] = useState(initialPersona.name);
   const [icon, setIcon] = useState(initialPersona.icon);
+  const [luronPersonaType, setLuronPersonaType] = useState(initialPersona.luron_persona_type || 'manager');
 
   const currentConfig = getPersonaConfig(initialPersona.id);
   
@@ -67,7 +79,7 @@ export default function PersonaSettings() {
   };
 
   const handleSave = () => {
-    updatePersona(initialPersona.id, { name, icon });
+    updatePersona(initialPersona.id, { name, icon, ...(isCustomPersona && { luron_persona_type: luronPersonaType }) });
     updatePersonaConfig(initialPersona.id, {
       tone: selectedTone,
       background: selectedBackground,
@@ -190,6 +202,32 @@ export default function PersonaSettings() {
                   maxLength={2}
                 />
               </div>
+
+              {isCustomPersona && (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 mb-1">Call Behavior</label>
+                  <p className="text-xs text-zinc-500 mb-3">Which AI character should this persona act like on calls?</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {luronPersonaOptions.map((option) => (
+                      <button
+                        key={option.id}
+                        onClick={() => setLuronPersonaType(option.id)}
+                        className={`flex items-center gap-2 p-3 rounded-xl border transition-all text-left ${
+                          luronPersonaType === option.id
+                            ? 'bg-red-500/20 border-red-500/50 text-white'
+                            : 'bg-zinc-800/50 border-zinc-700 text-zinc-400'
+                        }`}
+                      >
+                        <span className="text-lg">{option.icon}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold truncate">{option.label}</p>
+                          <p className="text-[10px] text-zinc-500 truncate">{option.description}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -257,12 +295,12 @@ export default function PersonaSettings() {
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
-                  className="flex items-center gap-3 bg-zinc-800/50 rounded-2xl p-3 group"
+                  className="flex items-center gap-3 bg-zinc-800/50 rounded-2xl p-3"
                 >
                   <span className="flex-1 text-sm text-white">{phrase}</span>
                   <button
                     onClick={() => handleRemovePhrase(index)}
-                    className="p-1 hover:bg-zinc-700 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+                    className="p-1 rounded-full transition-colors"
                   >
                     <X className="w-4 h-4 text-red-400" />
                   </button>
@@ -330,12 +368,18 @@ export default function PersonaSettings() {
           </div>
 
           <div className="pb-20">
-            <button
-              onClick={handleDelete}
-              className="w-full bg-zinc-900 hover:bg-red-950/30 text-zinc-500 hover:text-red-500 font-semibold py-4 rounded-3xl border border-zinc-800 hover:border-red-900/50 transition-all"
+            <motion.button
+              onClick={isCustomPersona ? handleDelete : undefined}
+              disabled={!isCustomPersona}
+              whileTap={isCustomPersona ? { scale: 0.97, opacity: 0.85 } : {}}
+              className={`w-full font-bold py-4 rounded-full transition-all ${
+                isCustomPersona
+                  ? 'bg-gradient-to-r from-red-500 to-red-600 text-white shadow-lg shadow-red-500/30'
+                  : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+              }`}
             >
-              Delete Persona
-            </button>
+              {isCustomPersona ? 'Delete Persona' : 'Default Persona'}
+            </motion.button>
           </div>
 
         </div>

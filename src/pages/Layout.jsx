@@ -49,7 +49,7 @@ function LayoutContent({ children, currentPageName }) {
   const location = useLocation();
   const { isTabBarHidden } = useApp();
   
-  const hideTabBar = ['Onboarding', 'Auth', 'PhoneVerification', 'PersonaSettings'].includes(currentPageName) || isTabBarHidden;
+  const hideTabBar = ['Onboarding', 'Auth', 'PhoneVerification', 'PersonaSettings', 'Paywall'].includes(currentPageName) || isTabBarHidden;
   
   const tabs = [
     { name: 'Home', path: createPageUrl('Home'), icon: Phone, label: 'Schedule' },

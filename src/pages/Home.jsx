@@ -16,15 +16,19 @@ import ContactMethodSelector from '../components/ContactMethodSelector';
 import CallerIDSelector from '../components/CallerIDSelector';
 import { scheduleCall as scheduleCallAPI, getUserId } from '../api/luronApi';
 
+
 // Personas are now managed in PersonaContext
 
+// Map app voice IDs to valid Supabase voices table IDs
+const VOICE_DB_MAP = { emma: 'emma', michael: 'james', sarah: 'emma' };
+const toDbVoiceId = (id) => VOICE_DB_MAP[id] || 'emma';
 
 export default function Home() {
   const navigate = useNavigate();
   const location = useLocation();
   const topRef = useRef(null);
   const { getPersonaConfig, personas, addPersona } = usePersona();
-  const { upcomingCalls, addUpcomingCall, removeUpcomingCall, updateUpcomingCall, addToHistory, setIsTabBarHidden } = useApp();
+  const { upcomingCalls, addUpcomingCall, removeUpcomingCall, updateUpcomingCall, addToHistory, updateHistoryItem, updateHistoryStatus, syncPendingStatuses, setIsTabBarHidden } = useApp();
   const { user } = useAuth();
   const [userPhone, setUserPhone] = useState(null);
 
@@ -38,6 +42,8 @@ export default function Home() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [editingCallId, setEditingCallId] = useState(null);
   const [showCustomTime, setShowCustomTime] = useState(false);
+  const [customDate, setCustomDate] = useState(null);   // ISO string of selected custom datetime
+  const [customTimeError, setCustomTimeError] = useState('');
   const [showVoiceSelector, setShowVoiceSelector] = useState(false);
   const [showCallerIDSelector, setShowCallerIDSelector] = useState(false);
   const [voiceCategory, setVoiceCategory] = useState('realistic');
@@ -47,6 +53,7 @@ export default function Home() {
   // Luron API Integration
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState(null);
+  const [showConfirmSchedule, setShowConfirmSchedule] = useState(false);
 
   const tips = [
     "Customize caller names in Account settings",
@@ -171,7 +178,16 @@ export default function Home() {
     navigate(createPageUrl('PersonaSettings'), { state: { persona: newPersona } });
   };
 
-  const handleSchedule = async () => {
+  const handleSchedule = () => {
+    // If there are already pending calls and we're not editing, ask for confirmation
+    if (!editingCallId && upcomingCalls.length > 0) {
+      setShowConfirmSchedule(true);
+      return;
+    }
+    doSchedule();
+  };
+
+  const doSchedule = async () => {
     const persona = personas.find((p) => p.id === selectedPersona);
     const personaConfig = getPersonaConfig(selectedPersona);
 
@@ -182,8 +198,10 @@ export default function Home() {
     let durationMs = 0;
     if (selectedTime === '3min') durationMs = 3 * 60 * 1000;
     else if (selectedTime === '5min') durationMs = 5 * 60 * 1000;
-    else if (selectedTime === 'now') durationMs = 5000; // 5 seconds for "now"
-    else durationMs = 10 * 60 * 1000; // default/custom logic placeholder
+    else if (selectedTime === 'now') durationMs = 5000;
+    else if (selectedTime === 'custom' && customDate) {
+      durationMs = Math.max(5000, new Date(customDate).getTime() - Date.now());
+    }
 
     if (editingCallId) {
       // Update existing call via Context (keep local-only functionality for editing)
@@ -197,7 +215,7 @@ export default function Home() {
         updateUpcomingCall(editingCallId, {
           // DB fields
           persona_id:       selectedPersona,
-          voice_id:         selectedVoice,
+          voice_id:         toDbVoiceId(selectedVoice),
           caller_id:        selectedCallerID?.id || null,
           contact_methods:  contactMethods,
           context_note:     note || '',
@@ -222,9 +240,15 @@ export default function Home() {
     } else {
       // Create new call via Luron API with optimistic update
       try {
-        // Check if user has verified phone number
-        if (!userPhone) {
+        // Email-only schedules don't need a phone number
+        const isEmailOnly = contactMethods.length === 1 && contactMethods[0] === 'email';
+        if (!userPhone && !isEmailOnly) {
           setScheduleError('Please verify your phone number first. Go to Account to add your phone.');
+          setTimeout(() => setScheduleError(null), 5000);
+          return;
+        }
+        if (isEmailOnly && !user?.email) {
+          setScheduleError('No email address found. Please sign in with an email account.');
           setTimeout(() => setScheduleError(null), 5000);
           return;
         }
@@ -235,11 +259,13 @@ export default function Home() {
         const newCall = {
           // DB column names — sent to Supabase
           persona_id:       selectedPersona,
-          voice_id:         selectedVoice,
+          voice_id:         toDbVoiceId(selectedVoice),
           caller_id:        selectedCallerID?.id || null,
           contact_methods:  contactMethods,
           context_note:     note || '',
-          due_timestamp:    new Date(Date.now() + durationMs).toISOString(),
+          due_timestamp:    (selectedTime === 'custom' && customDate)
+                              ? customDate
+                              : new Date(Date.now() + durationMs).toISOString(),
           tone:             personaConfig?.tone || null,
           background_sound: personaConfig?.background || null,
           duration_seconds: selectedTime === '3min' ? 180 : selectedTime === '5min' ? 300 : 30,
@@ -254,7 +280,25 @@ export default function Home() {
             contactMethods, note, selectedCallerID, voiceCategory, orderedPersonas
           }
         };
-        addUpcomingCall(newCall);
+        const savedCall = await addUpcomingCall(newCall);
+
+        // Save history entry IMMEDIATELY (before Luron API) so history_id is
+        // always available on the upcoming call before the timer could fire.
+        // luron_call_id is null for now — updated once Luron responds.
+        const historyItem = await addToHistory({
+          persona_id:       selectedPersona,
+          voice_id:         toDbVoiceId(selectedVoice),
+          caller_id:        selectedCallerID?.id || null,
+          contact_methods:  contactMethods,
+          context_note:     note || '',
+          status:           'scheduled',
+          duration_seconds: selectedTime === '3min' ? 180 : selectedTime === '5min' ? 300 : 0,
+        });
+
+        // Link history_id to upcoming call right away (UI-only, not a DB column)
+        if (savedCall?.id && historyItem?.id) {
+          updateUpcomingCall(savedCall.id, { history_id: historyItem.id });
+        }
 
         // Show success immediately
         setIsScheduling(false);
@@ -265,39 +309,50 @@ export default function Home() {
         // Reset the note field
         setNote('');
 
-        // Call Luron API in background (don't block UI)
-        // Always save to Supabase call_history regardless of Luron result
-        scheduleCallAPI({
-          userId:          getUserId(),
-          contactMethods,
+        // Map app persona ID → valid Luron persona_type
+        // Built-in IDs match Luron's types directly; custom personas use their saved luron_persona_type
+        const VALID_LURON_TYPES = new Set(['manager','coordinator','friend','mom','doctor','boss','service']);
+        const luronPersonaType = VALID_LURON_TYPES.has(selectedPersona)
+          ? selectedPersona
+          : (persona?.luron_persona_type || 'manager');
+
+        // Fire one Luron API call per selected contact method (in parallel)
+        const baseParams = {
+          userId:         getUserId(),
           selectedTime,
-          customDate:      null,
-          selectedPersona,
+          customDate:     selectedTime === 'custom' && customDate ? new Date(customDate) : null,
+          selectedPersona: luronPersonaType,
           note,
           selectedVoice,
           selectedCallerID,
           personaConfig,
-          recipientPhone:  userPhone
-        })
-          .then(response => {
-            console.log('✅ Call scheduled with Luron API:', response.call_id);
-          })
-          .catch(error => {
-            console.error('❌ Luron API error (background):', error);
-          })
-          .finally(() => {
-            // Save to Supabase call_history — runs whether Luron succeeded or failed
-            addToHistory({
-              persona_id:       selectedPersona,
-              voice_id:         selectedVoice,
-              caller_id:        selectedCallerID?.id || null,
-              contact_methods:  contactMethods,
-              context_note:     note || '',
-              status:           'scheduled',
-              duration_seconds: selectedTime === '3min' ? 180 : selectedTime === '5min' ? 300 : 0,
-              scheduled_time:   new Date(Date.now() + durationMs).toISOString(),
-            });
-          });
+          recipientPhone: userPhone,
+          recipientEmail: user?.email || null,
+        };
+
+        let primaryLuronCallId = null;
+
+        Promise.allSettled(
+          contactMethods.map(method =>
+            scheduleCallAPI({ ...baseParams, contactMethods: [method] })
+              .then(response => {
+                console.log(`✅ Luron [${method}] scheduled:`, response.call_id);
+                if (!primaryLuronCallId) primaryLuronCallId = response.call_id || null;
+              })
+              .catch(error => {
+                console.error(`❌ Luron [${method}] error:`, error.message || error);
+              })
+          )
+        ).then(() => {
+          if (!primaryLuronCallId) return;
+          // Back-fill luron_call_id on history record + upcoming call now that we have it
+          if (historyItem?.id) {
+            updateHistoryItem(historyItem.id, { luron_call_id: primaryLuronCallId });
+          }
+          if (savedCall?.id) {
+            updateUpcomingCall(savedCall.id, { luron_call_id: primaryLuronCallId });
+          }
+        });
 
       } catch (error) {
         console.error('Error scheduling call:', error);
@@ -318,11 +373,21 @@ export default function Home() {
   };
 
   const handleCompleteCall = (call) => {
-    addToHistory(call);
-    // Wait a moment before removing from upcoming list to show checkmark
-    setTimeout(() => {
-      removeUpcomingCall(call.id);
-    }, 3000);
+    // Optimistically mark 'missed' immediately — instant feedback in History.
+    // Update the existing history record (preserves luron_call_id for sync).
+    // Fall back to insert if history_id not yet set (e.g. API still in flight).
+    if (call.history_id) {
+      updateHistoryStatus(call.history_id, 'missed');
+    } else {
+      addToHistory({ ...call, status: 'missed' });
+    }
+    setTimeout(() => removeUpcomingCall(call.id), 3000);
+
+    // Poll Luron for the real outcome — start quickly, then at longer intervals.
+    // Declined shows up fast (busy signal); voicemail takes ~6 min.
+    [30 * 1000, 60 * 1000, 2 * 60 * 1000, 5 * 60 * 1000, 8 * 60 * 1000].forEach(
+      delay => setTimeout(() => syncPendingStatuses(), delay)
+    );
   };
 
   const handleEditCall = (callId) => {
@@ -343,11 +408,24 @@ export default function Home() {
     }
   };
 
+  // Format a Date to the value required by <input type="datetime-local">
+  const toDatetimeLocal = (date) => {
+    const d = new Date(date);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  };
+
   const handleTimeSelect = (timeId) => {
     if (timeId === 'custom') {
+      // Default to 10 min from now when opening modal
+      if (!customDate) {
+        setCustomDate(new Date(Date.now() + 10 * 60 * 1000).toISOString());
+      }
+      setCustomTimeError('');
       setShowCustomTime(true);
     } else {
       setSelectedTime(timeId);
+      setCustomDate(null);
     }
   };
 
@@ -358,6 +436,9 @@ export default function Home() {
     if (selectedTime === '3min') return '3 minutes';
     if (selectedTime === '5min') return '5 minutes';
     if (selectedTime === 'now') return 'right now';
+    if (selectedTime === 'custom' && customDate) {
+      return new Date(customDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
     return 'at your custom time';
   };
 
@@ -622,10 +703,8 @@ export default function Home() {
           <motion.button
             onClick={handleSchedule}
             disabled={isScheduling}
-            whileTap={{ scale: isScheduling ? 1 : 0.97 }}
-            className="relative w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 disabled:from-red-500/50 disabled:to-red-600/50 disabled:cursor-not-allowed text-white font-bold text-lg py-5 rounded-full shadow-2xl shadow-red-500/50 flex items-center justify-center gap-2 transition-all duration-200 group overflow-hidden">
-
-            <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+            whileTap={{ scale: isScheduling ? 1 : 0.97, opacity: isScheduling ? 1 : 0.85 }}
+            className="relative w-full bg-gradient-to-r from-red-500 to-red-600 disabled:from-red-500/50 disabled:to-red-600/50 disabled:cursor-not-allowed text-white font-bold text-lg py-5 rounded-full shadow-2xl shadow-red-500/50 flex items-center justify-center gap-2 transition-colors duration-200">
             {isScheduling ? (
               <>
                 <div className="relative z-10 w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -652,7 +731,7 @@ export default function Home() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed bottom-32 left-1/2 -translate-x-1/2 w-[380px]">
+            className="fixed left-4 right-4 z-50" style={{ bottom: 'calc(env(safe-area-inset-bottom) + 7rem)' }}>
 
               <div className="bg-black border border-red-500 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3">
                 <div className="w-8 h-8 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center text-sm">
@@ -782,26 +861,59 @@ export default function Home() {
                   </button>
                 </div>
                 
-                <div className="mb-4 overflow-hidden">
+                <div className="mb-2">
                   <input
-                  type="datetime-local"
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl  py-3 text-white focus:outline-none focus:border-red-500/50" />
-
+                    type="datetime-local"
+                    value={customDate ? toDatetimeLocal(customDate) : ''}
+                    min={toDatetimeLocal(new Date(Date.now() + 60 * 1000))}
+                    max={toDatetimeLocal(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000))}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) return;
+                      const selected = new Date(val).getTime();
+                      const now = Date.now();
+                      if (selected <= now) {
+                        setCustomTimeError('Please select a future time.');
+                      } else if (selected > now + 7 * 24 * 60 * 60 * 1000) {
+                        setCustomTimeError('Maximum 7 days in advance.');
+                      } else {
+                        setCustomTimeError('');
+                      }
+                      setCustomDate(new Date(val).toISOString());
+                    }}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-red-500/50 focus:ring-2 focus:ring-red-500/20 transition-all"
+                    style={{ colorScheme: 'dark', fontSize: '16px' }}
+                  />
                 </div>
 
-                <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl mb-6">
-                  <p className="text-xs text-red-300 leading-relaxed">
-                    <strong>💡 Tip:</strong> Schedule calls up to 7 days in advance!
-                  </p>
-                </div>
-                
+                {customTimeError ? (
+                  <p className="text-xs text-red-400 mb-4 px-1">{customTimeError}</p>
+                ) : (
+                  <p className="text-xs text-zinc-500 mb-4 px-1">Up to 7 days from today</p>
+                )}
+
                 <button
-                onClick={() => {
-                  setSelectedTime('custom');
-                  setShowCustomTime(false);
-                }}
-                className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-4 rounded-full transition-colors">
-
+                  onClick={() => {
+                    if (!customDate) {
+                      setCustomTimeError('Please select a date and time.');
+                      return;
+                    }
+                    const selected = new Date(customDate).getTime();
+                    const now = Date.now();
+                    if (selected <= now) {
+                      setCustomTimeError('Please select a future time.');
+                      return;
+                    }
+                    if (selected > now + 7 * 24 * 60 * 60 * 1000) {
+                      setCustomTimeError('Maximum 7 days in advance.');
+                      return;
+                    }
+                    setSelectedTime('custom');
+                    setShowCustomTime(false);
+                  }}
+                  disabled={!!customTimeError || !customDate}
+                  className="w-full bg-red-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white font-semibold py-4 rounded-full transition-colors"
+                >
                   Set Time
                 </button>
               </motion.div>
@@ -809,6 +921,95 @@ export default function Home() {
           }
         </AnimatePresence>
       </div>
+
+      {/* Confirm schedule when calls already pending */}
+      <AnimatePresence>
+        {showConfirmSchedule && (() => {
+          const next = upcomingCalls[0];
+          const secsLeft = next?.due_timestamp
+            ? Math.max(0, Math.ceil((new Date(next.due_timestamp).getTime() - Date.now()) / 1000))
+            : null;
+          const timeLabel = secsLeft === null ? null
+            : secsLeft < 60 ? `${secsLeft}s`
+            : `${Math.floor(secsLeft / 60)}:${(secsLeft % 60).toString().padStart(2, '0')}`;
+
+          return (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+              onClick={() => setShowConfirmSchedule(false)}
+            >
+              <motion.div
+                initial={{ scale: 0.92, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.92, opacity: 0 }}
+                transition={{ type: 'spring', damping: 28, stiffness: 300 }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-[400px] bg-zinc-900 border border-zinc-800 rounded-3xl p-6"
+              >
+                {/* Header */}
+                <div className="flex items-center gap-3 mb-5">
+                  <div className="w-10 h-10 rounded-2xl bg-yellow-500/10 border border-yellow-500/30 flex items-center justify-center flex-shrink-0">
+                    <AlertCircle className="w-5 h-5 text-yellow-500" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-white text-base">Already scheduled</h3>
+                    <p className="text-xs text-zinc-400">You have a pending escape call</p>
+                  </div>
+                </div>
+
+                {/* Existing call preview */}
+                {next && (
+                  <div className="bg-zinc-800/60 border border-zinc-700/50 rounded-2xl p-4 mb-5 flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gradient-to-br from-red-500/20 to-red-600/20 border border-red-500/30 rounded-full flex items-center justify-center text-xl flex-shrink-0">
+                      {next.icon || '📞'}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">
+                        {next.persona || next.persona_id || 'Scheduled call'}
+                      </p>
+                      {timeLabel && (
+                        <p className="text-xs text-yellow-400 flex items-center gap-1 mt-0.5">
+                          <Clock className="w-3 h-3" />
+                          Coming in {timeLabel}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-xs font-medium px-2 py-1 bg-yellow-500/10 text-yellow-400 rounded-full border border-yellow-500/20">
+                      Pending
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-sm text-zinc-400 mb-5 leading-relaxed">
+                  Do you want to schedule another escape anyway? Both calls will be active at the same time.
+                </p>
+
+                {/* Actions */}
+                <div className="space-y-3">
+                  <motion.button
+                    whileTap={{ scale: 0.97, opacity: 0.85 }}
+                    onClick={() => { setShowConfirmSchedule(false); doSchedule(); }}
+                    className="w-full bg-gradient-to-r from-red-500 to-red-600 text-white font-bold py-4 rounded-full shadow-lg shadow-red-500/30 flex items-center justify-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Schedule Anyway
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => setShowConfirmSchedule(false)}
+                    className="w-full bg-zinc-800 text-zinc-300 font-semibold py-4 rounded-full"
+                  >
+                    Cancel
+                  </motion.button>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+      </AnimatePresence>
     </div>);
 
 }

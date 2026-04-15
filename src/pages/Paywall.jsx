@@ -91,8 +91,8 @@ export default function Paywall() {
         </AnimatePresence>
 
         <button
-          onClick={() => navigate(-1)}
-          className="mb-4 p-2 hover:bg-zinc-900 rounded-full transition-colors"
+          onClick={() => navigate(createPageUrl('Home'), { replace: true })}
+          className="relative z-10 my-4 p-2 hover:bg-zinc-900 rounded-full transition-colors"
         >
           <X className="w-6 h-6 text-white" />
         </button>
@@ -239,7 +239,7 @@ export default function Paywall() {
           </button>
           
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Home'), { replace: true })}
             className="w-full text-zinc-400 hover:text-white font-medium py-2 transition-colors text-sm"
           >
             Keep Free Plan

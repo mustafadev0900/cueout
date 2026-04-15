@@ -17,16 +17,32 @@ export const getQuickSchedule = (scheduleId) =>
     supabase.from('quick_schedules').select('*').eq('id', scheduleId).single()
   );
 
+// Expand nested preset object to flat DB columns and strip local id
+const toDbRecord = (schedule) => {
+  const { id: _localId, preset, ...rest } = schedule;
+  return {
+    ...rest,
+    ...(preset ? {
+      persona_id:      preset.persona         || 'manager',
+      voice_id:        preset.voice           || 'emma',
+      contact_methods: preset.contactMethods  || ['call'],
+      context_note:    preset.note            || '',
+      time_preset:     preset.time            || '3min',
+      voice_category:  preset.voiceCategory   || 'realistic',
+    } : {})
+  };
+};
+
 export const createQuickSchedule = (schedule) =>
   withAuth((userId) =>
     supabaseQuery(() =>
-      supabase.from('quick_schedules').insert([{ ...schedule, user_id: userId }]).select().single()
+      supabase.from('quick_schedules').insert([{ ...toDbRecord(schedule), user_id: userId }]).select().single()
     )
   );
 
 export const updateQuickSchedule = (scheduleId, updates) =>
   supabaseQuery(() =>
-    supabase.from('quick_schedules').update(updates).eq('id', scheduleId).select().single()
+    supabase.from('quick_schedules').update(toDbRecord(updates)).eq('id', scheduleId).select().single()
   );
 
 export const deleteQuickSchedule = (scheduleId) =>

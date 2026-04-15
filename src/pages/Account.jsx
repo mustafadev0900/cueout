@@ -45,9 +45,10 @@ export default function Account() {
   const [selectedRingtone, setSelectedRingtone] = useState('Default');
   const [showRingtoneSelector, setShowRingtoneSelector] = useState(false);
   const [showCallerIDEditor, setShowCallerIDEditor] = useState(false);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
   const navigate = useNavigate();
   const { callerIDs, updateCallerIDName, setIsTabBarHidden } = useApp();
-  const { user, signOut } = useAuth();
+  const { user, signOut, checkUser } = useAuth();
 
   const ringtones = ['Default', 'Classic', 'Modern', 'Gentle', 'Urgent'];
 
@@ -63,31 +64,37 @@ export default function Account() {
     }
   }, [showRingtoneSelector, showCallerIDEditor, setIsTabBarHidden]);
 
+  // On mount, force a fresh fetch from server so we always have the latest email
+  useEffect(() => {
+    checkUser();
+  }, []);
+
   // Load user data from Supabase
   useEffect(() => {
     async function loadUserProfile() {
       if (!user) return;
 
-      setEmail(user.email || '');
-      setUsername(user.user_metadata?.full_name || '');
+      setIsLoadingProfile(true);
+      try {
+        // Get fresh user directly from server (bypasses cached session)
+        const { data: { user: freshUser } } = await supabase.auth.getUser();
+        setEmail((freshUser?.email || user.email) || '');
+        setUsername(freshUser?.user_metadata?.full_name || user.user_metadata?.full_name || '');
 
-      // Fetch user profile from users table
-      const { data: profile, error } = await supabase
-        .from('users')
-        .select('phone_number, country_code')
-        .eq('id', user.id)
-        .single();
+        // Fetch user profile from users table
+        const { data: profile, error } = await supabase
+          .from('users')
+          .select('phone_number, country_code')
+          .eq('id', user.id)
+          .single();
 
-      if (error) {
-        console.error('Error loading user profile:', error);
-        return;
-      }
-
-      // Format phone number with country code
-      if (profile?.phone_number) {
-        const formatted = formatPhoneNumber(profile.phone_number, profile.country_code);
-        setPhoneNumber(formatted);
-        setTempPhone(formatted);
+        if (!error && profile?.phone_number) {
+          const formatted = formatPhoneNumber(profile.phone_number, profile.country_code);
+          setPhoneNumber(formatted);
+          setTempPhone(formatted);
+        }
+      } finally {
+        setIsLoadingProfile(false);
       }
     }
 
@@ -126,11 +133,25 @@ export default function Account() {
     setIsSavingEmail(true);
     setEmailError('');
     try {
-      const { error } = await supabase.auth.updateUser({ email: trimmed });
-      if (error) throw error;
-      setEmailSuccess(`Confirmation sent to ${trimmed}. Check your inbox to complete the change.`);
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/update-email`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ newEmail: trimmed }),
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to update email.');
+
+      setEmail(trimmed);
+      setEmailSuccess('Email updated successfully.');
       setIsEditingEmail(false);
-      setTimeout(() => setEmailSuccess(''), 6000);
+      setTimeout(() => setEmailSuccess(''), 4000);
     } catch (err) {
       setEmailError(err.message || 'Failed to update email. Try again.');
       console.error('Error updating email:', err);
@@ -161,6 +182,15 @@ export default function Account() {
       setIsSavingUsername(false);
     }
   };
+
+  if (isLoadingProfile) {
+    return (
+      <div className="min-h-full bg-black flex flex-col items-center justify-center gap-4">
+        <div className="w-10 h-10 border-2 border-zinc-700 border-t-red-500 rounded-full animate-spin" />
+        <p className="text-zinc-500 text-sm">Loading your account...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full bg-black px-6 pt-safe pb-safe overflow-x-hidden">

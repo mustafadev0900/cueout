@@ -18,6 +18,7 @@ import PersonaSettings from "./PersonaSettings";
 
 import { BrowserRouter as Router, Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuth } from '../components/AuthContext';
+import { getVerificationStatus } from '../api/verification';
 import { useEffect, useState } from 'react';
 
 const PAGES = {
@@ -57,29 +58,33 @@ function _getCurrentPage(url) {
 function InitialRoute() {
     const { user, isLoading } = useAuth();
     const [hasSeenOnboarding, setHasSeenOnboarding] = useState(null);
+    const [phoneVerified, setPhoneVerified] = useState(null);
 
     useEffect(() => {
-        // Check if user has completed onboarding
         const onboardingComplete = localStorage.getItem('onboardingComplete');
         setHasSeenOnboarding(onboardingComplete === 'true');
     }, []);
 
+    useEffect(() => {
+        if (!user) return;
+        getVerificationStatus(user.id).then(({ isVerified }) => {
+            setPhoneVerified(isVerified);
+        });
+    }, [user]);
+
     // Wait for auth and onboarding status to load
-    if (isLoading || hasSeenOnboarding === null) {
-        return null; // or a loading spinner
-    }
+    if (isLoading || hasSeenOnboarding === null) return null;
+    // If logged in, wait for phone check
+    if (user && phoneVerified === null) return null;
 
-    // If logged in, go to Home
     if (user) {
-        return <Navigate to="/Home" replace />;
+        return <Navigate to={phoneVerified ? "/Home" : "/PhoneVerification"} replace />;
     }
 
-    // If not logged in but has seen onboarding, go to Auth
     if (hasSeenOnboarding) {
         return <Navigate to="/Auth" replace />;
     }
 
-    // Otherwise, show onboarding
     return <Navigate to="/Onboarding" replace />;
 }
 

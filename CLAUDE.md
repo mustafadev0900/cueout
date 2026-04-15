@@ -10,13 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Development
 npm run dev          # Vite dev server at http://localhost:5173
 
-# Build + deploy to iOS simulator (full flow)
+# Build + deploy to iOS simulator (full flow) — always use iPhone 17 Pro
 npm run build && npx cap sync ios
 cd ios/App && xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug \
-  -destination 'platform=iOS Simulator,id=477AFDB4-5172-4121-8933-D184DC9A191A' build 2>&1 | grep -E "SUCCEEDED|FAILED|error:"
-xcrun simctl install 477AFDB4-5172-4121-8933-D184DC9A191A \
+  -destination 'platform=iOS Simulator,id=8FBCDAD6-BD6B-4233-BAAD-B1757EDC4CAE' build 2>&1 | grep -E "SUCCEEDED|FAILED|error:"
+xcrun simctl install 8FBCDAD6-BD6B-4233-BAAD-B1757EDC4CAE \
   ~/Library/Developer/Xcode/DerivedData/App-*/Build/Products/Debug-iphonesimulator/App.app
-xcrun simctl launch 477AFDB4-5172-4121-8933-D184DC9A191A com.cueout.app
+xcrun simctl launch 8FBCDAD6-BD6B-4233-BAAD-B1757EDC4CAE com.cueout.app
 
 # Lint
 npm run lint

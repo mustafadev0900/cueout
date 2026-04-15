@@ -1,402 +1,216 @@
 /**
- * Luron API Integration for QueOut App
- * Base URL: https://luron-api.onrender.com
+ * Luron API Integration
+ * Uses the same base URL and raw fetch approach as the working call API.
  */
 
 const BASE_URL = 'https://luron-api.onrender.com';
 
-/**
- * Helper function to calculate ISO 8601 datetime from selectedTime
- * @param {string} selectedTime - '3min', '5min', 'now', or 'custom'
- * @param {Date} customDate - Custom date for 'custom' option
- * @returns {string} ISO 8601 formatted datetime
- */
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function calculateScheduleTime(selectedTime, customDate = null) {
   const now = new Date();
-  let scheduledTime;
+  let scheduled;
 
   switch (selectedTime) {
-    case 'now':
-      // 5 seconds from now
-      scheduledTime = new Date(now.getTime() + 5000);
-      break;
-    case '3min':
-      // 3 minutes from now
-      scheduledTime = new Date(now.getTime() + 3 * 60 * 1000);
-      break;
-    case '5min':
-      // 5 minutes from now
-      scheduledTime = new Date(now.getTime() + 5 * 60 * 1000);
-      break;
-    case 'custom':
-      // Use provided custom date or default to 10 minutes
-      if (customDate) {
-        scheduledTime = new Date(customDate);
-      } else {
-        scheduledTime = new Date(now.getTime() + 10 * 60 * 1000);
-      }
-      break;
-    default:
-      // Default to 3 minutes
-      scheduledTime = new Date(now.getTime() + 3 * 60 * 1000);
+    case 'now':    scheduled = new Date(now.getTime() + 5_000);           break;
+    case '3min':   scheduled = new Date(now.getTime() + 3 * 60_000);      break;
+    case '5min':   scheduled = new Date(now.getTime() + 5 * 60_000);      break;
+    case 'custom': scheduled = customDate ? new Date(customDate)
+                                          : new Date(now.getTime() + 10 * 60_000); break;
+    default:       scheduled = new Date(now.getTime() + 3 * 60_000);
   }
 
-  const delaySeconds = Math.round((scheduledTime.getTime() - now.getTime()) / 1000);
-  console.log(`⏰ Scheduling call for ${selectedTime}: ${delaySeconds} seconds from now (${scheduledTime.toISOString()})`);
-
-  return scheduledTime.toISOString();
+  console.log(`⏰ Scheduling for ${selectedTime}: ${scheduled.toISOString()}`);
+  return scheduled.toISOString();
 }
 
 /**
- * Map contact methods array to primary type
- * @param {Array<string>} contactMethods - Array of contact methods from app
- * @returns {string} Primary contact type: 'call', 'text', or 'email'
+ * Auto-generate an email subject from persona + note context.
  */
-function mapContactMethodToType(contactMethods) {
-  if (!contactMethods || contactMethods.length === 0) {
-    return 'call'; // Default to call
+function generateEmailSubject(persona, note) {
+  if (note && note.trim().length > 0) {
+    const first = note.split(/[.!?]/)[0].trim();
+    return first.length <= 60 ? first : first.substring(0, 57) + '…';
   }
-
-  // Priority: call > text > email
-  if (contactMethods.includes('call')) return 'call';
-  if (contactMethods.includes('text')) return 'text';
-  if (contactMethods.includes('email')) return 'email';
-
-  return 'call'; // Fallback
+  const defaults = {
+    manager:     'Urgent: Team Meeting Required',
+    coordinator: 'Scheduling Update Required',
+    friend:      'Hey, can we chat?',
+    mom:         'Please call me when you can',
+    doctor:      'Important: Medical Appointment Reminder',
+    boss:        'Quick check-in needed',
+    service:     'Action Required: Account Update',
+  };
+  return defaults[persona] || 'Quick Update';
 }
 
+// ─── Schedule ─────────────────────────────────────────────────────────────────
+
 /**
- * Schedule a new call via Luron API
- * @param {Object} params - Call scheduling parameters
- * @param {string} params.userId - User ID
- * @param {Array<string>} params.contactMethods - Contact methods array
- * @param {string} params.selectedTime - Time option
- * @param {Date} params.customDate - Custom date if selectedTime is 'custom'
- * @param {string} params.selectedPersona - Persona ID
- * @param {string} params.note - Custom instruction/context
- * @param {string} params.selectedVoice - Voice ID
- * @param {Object} params.selectedCallerID - Caller ID object
- * @param {Object} params.personaConfig - Persona configuration
- * @param {string} params.recipientPhone - Optional recipient phone number (for verification calls)
- * @returns {Promise<Object>} Response with success, message, call_id, scheduled_for
+ * Schedule a call, text, or email via Luron API.
+ *
+ * @param {Object}   params
+ * @param {string}   params.userId
+ * @param {string[]} params.contactMethods   - ['call'] | ['text'] | ['email']
+ * @param {string}   params.selectedTime     - '3min' | '5min' | 'now' | 'custom'
+ * @param {Date}     [params.customDate]
+ * @param {string}   params.selectedPersona
+ * @param {string}   [params.note]
+ * @param {string}   params.selectedVoice
+ * @param {Object}   [params.selectedCallerID]
+ * @param {Object}   [params.personaConfig]
+ * @param {string}   [params.recipientPhone]  - required for call / text
+ * @param {string}   [params.recipientEmail]  - required for email
  */
 export async function scheduleCall(params) {
-  try {
-    const {
-      userId,
-      contactMethods = ['call'],
-      selectedTime = '3min',
-      customDate = null,
-      selectedPersona = 'manager',
-      note = '',
-      selectedVoice = 'emma',
-      selectedCallerID = null,
-      personaConfig = {},
-      recipientPhone = null
-    } = params;
+  const {
+    userId,
+    contactMethods   = ['call'],
+    selectedTime     = '3min',
+    customDate       = null,
+    selectedPersona  = 'manager',
+    note             = '',
+    selectedVoice    = 'emma',
+    selectedCallerID = null,
+    personaConfig    = {},
+    recipientPhone   = null,
+    recipientEmail   = null,
+  } = params;
 
-    // Map app data to Luron API format
-    const scheduledTime = calculateScheduleTime(selectedTime, customDate);
-    const now = new Date();
-    const delayMs = new Date(scheduledTime).getTime() - now.getTime();
-    const delayMinutes = Math.round(delayMs / 60000);
+  const scheduledTime = calculateScheduleTime(selectedTime, customDate);
 
-    console.log(`📅 Current time: ${now.toISOString()}`);
-    console.log(`📅 Scheduled time: ${scheduledTime}`);
-    console.log(`⏱️ Delay: ${delayMinutes} minutes (${Math.round(delayMs / 1000)} seconds)`);
+  const type = contactMethods.includes('email') ? 'email'
+             : contactMethods.includes('text')  ? 'text'
+             : 'call';
 
-    const requestBody = {
-      user_id: userId,
-      type: mapContactMethodToType(contactMethods),
-      when: scheduledTime,
-      persona_type: selectedPersona,
+  let body;
+
+  if (type === 'email') {
+    // ── Email format (from Luron API docs) ───────────────────────────────────
+    body = {
+      user_id:            userId,
+      type:               'email',
+      email_address:      recipientEmail,
+      when:               scheduledTime,
+      persona_type:       selectedPersona,
       custom_instruction: note || '',
       advanced_settings: {
-        tone: personaConfig.tone || 'casual',
-        voice: selectedVoice,
-        caller_id: selectedCallerID?.number || null,
-        duration: personaConfig.duration || 30,
-        // Convert custom_phrases array to comma-separated string
-        custom_phrases: Array.isArray(personaConfig.customPhrases)
-          ? personaConfig.customPhrases.join(', ')
-          : (personaConfig.customPhrases || '')
-      }
-    };
-
-    // Add recipient phone if provided (for verification calls)
-    if (recipientPhone) {
-      requestBody.phone_number = recipientPhone;
-    }
-
-    console.log('🚀 Calling Luron API:', BASE_URL + '/schedule');
-    console.log('📦 Request body:', JSON.stringify(requestBody, null, 2));
-
-    const response = await fetch(`${BASE_URL}/schedule`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+        email_subject: generateEmailSubject(selectedPersona, note),
       },
-      body: JSON.stringify(requestBody)
-    });
-
-    console.log('📡 Response status:', response.status, response.statusText);
-
-    const data = await response.json();
-    console.log('📥 Response data:', data);
-
-    if (!response.ok) {
-      // Handle different error status codes
-      if (response.status === 400) {
-        throw new Error(data.message || 'Invalid request parameters. Please check your input.');
-      } else if (response.status === 422) {
-        throw new Error(data.message || 'Validation error. Please check all fields.');
-      } else {
-        throw new Error(data.message || 'Failed to schedule call. Please try again.');
-      }
-    }
-
-    return {
-      success: true,
-      message: data.message || 'Call scheduled successfully',
-      call_id: data.call_id,
-      scheduled_for: data.scheduled_for
     };
-
-  } catch (error) {
-    console.error('Error scheduling call:', error);
-    console.error('Full error details:', {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
-      cause: error.cause
-    });
-
-    // Check if it's a network error
-    if (error.message === 'Failed to fetch' || error instanceof TypeError) {
-      throw new Error('Connection failed. Please check your internet connection and try again.');
-    }
-
-    throw error;
+  } else {
+    // ── Call / Text format ────────────────────────────────────────────────────
+    body = {
+      user_id:            userId,
+      type,
+      when:               scheduledTime,
+      persona_type:       selectedPersona,
+      custom_instruction: note || '',
+      advanced_settings: {
+        tone:           personaConfig.tone     || 'casual',
+        voice:          selectedVoice,
+        caller_id:      selectedCallerID?.number || null,
+        duration:       personaConfig.duration   || 30,
+        custom_phrases: Array.isArray(personaConfig.customPhrases)
+                          ? personaConfig.customPhrases.join(', ')
+                          : (personaConfig.customPhrases || ''),
+      },
+    };
+    if (recipientPhone) body.phone_number = recipientPhone;
   }
+
+  console.log('🚀 Luron schedule request:', JSON.stringify(body, null, 2));
+
+  const response = await fetch(`${BASE_URL}/schedule`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  });
+
+  console.log('📡 Response status:', response.status, response.statusText);
+  const data = await response.json();
+  console.log('📥 Response data:', data);
+
+  if (!response.ok) {
+    const msg = data.message || `Failed to schedule (${response.status})`;
+    throw new Error(msg);
+  }
+
+  return {
+    success:       true,
+    message:       data.message || 'Scheduled successfully',
+    call_id:       data.call_id,
+    scheduled_for: data.scheduled_for,
+  };
 }
 
-/**
- * Get call history for a user
- * @param {string} userId - User ID
- * @param {Object} filters - Optional filters
- * @param {string} filters.type - Filter by type: 'call', 'text', 'email'
- * @param {string} filters.status - Filter by status
- * @param {number} filters.limit - Max number of results (default: 50)
- * @param {number} filters.offset - Pagination offset (default: 0)
- * @returns {Promise<Object>} Response with success, user_id, total_count, history[]
- */
+// ─── History ──────────────────────────────────────────────────────────────────
+
 export async function getHistory(userId, filters = {}) {
-  try {
-    const {
-      type = null,
-      status = null,
-      limit = 50,
-      offset = 0
-    } = filters;
+  const { type = null, status = null, limit = 50, offset = 0 } = filters;
 
-    // Build query parameters
-    const params = new URLSearchParams({
-      user_id: userId,
-      limit: limit.toString(),
-      offset: offset.toString()
-    });
+  const params = new URLSearchParams({ user_id: userId, limit, offset });
+  if (type)   params.append('type',   type);
+  if (status) params.append('status', status);
 
-    if (type) params.append('type', type);
-    if (status) params.append('status', status);
+  const response = await fetch(`${BASE_URL}/history?${params.toString()}`, {
+    headers: { 'Content-Type': 'application/json' },
+  });
 
-    const response = await fetch(`${BASE_URL}/history?${params.toString()}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
+  const data = await response.json();
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        // No history found - return empty array
-        return {
-          success: true,
-          user_id: userId,
-          total_count: 0,
-          history: []
-        };
-      }
-      throw new Error(data.message || 'Failed to fetch history.');
+  if (!response.ok) {
+    if (response.status === 404) {
+      return { success: true, user_id: userId, total_count: 0, history: [] };
     }
-
-    return {
-      success: true,
-      user_id: data.user_id,
-      total_count: data.total_count,
-      history: data.history || []
-    };
-
-  } catch (error) {
-    console.error('Error fetching history:', error);
-
-    if (error.message === 'Failed to fetch' || error instanceof TypeError) {
-      throw new Error('Connection failed. Please check your internet connection and try again.');
-    }
-
-    throw error;
+    throw new Error(data.message || 'Failed to fetch history.');
   }
+
+  // Handle both API response shapes:
+  //   api.luron.ai/api/v1  → { data: [...], count: N }
+  //   luron-api.onrender.com → { history: [...], total_count: N }
+  const records = data.data || data.history || [];
+  return {
+    success:     true,
+    user_id:     data.user_id,
+    total_count: data.count || data.total_count || records.length,
+    history:     records,
+  };
 }
 
-/**
- * Get details for a specific call
- * @param {string} callId - Call ID
- * @returns {Promise<Object>} Response with success and call data
- */
 export async function getCallDetails(callId) {
-  try {
-    console.log('🔍 Fetching call details for:', callId);
+  console.log('🔍 Fetching call details:', callId);
 
-    const response = await fetch(`${BASE_URL}/history/${callId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
+  const response = await fetch(`${BASE_URL}/history/${callId}`, {
+    headers: { 'Content-Type': 'application/json' },
+  });
 
-    const data = await response.json();
+  const data = await response.json();
 
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error('Call not found.');
-      }
-      throw new Error(data.message || 'Failed to fetch call details.');
-    }
-
-    // Log the full response to see what's available
-    console.log('📞 Call Details:', JSON.stringify(data, null, 2));
-    console.log('💬 Call Context (conversation):', data.data?.call_context);
-    console.log('📊 Full Call Data:', data.data);
-
-    return {
-      success: true,
-      data: data.data
-    };
-
-  } catch (error) {
-    console.error('Error fetching call details:', error);
-
-    if (error.message === 'Failed to fetch' || error instanceof TypeError) {
-      throw new Error('Connection failed. Please check your internet connection and try again.');
-    }
-
-    throw error;
+  if (!response.ok) {
+    throw new Error(data.message || 'Failed to fetch call details.');
   }
+
+  // Handle both shapes: { data: {...} } and flat { id, status, ... }
+  const record = data.data || data;
+  console.log('📞 Call details:', record);
+  return { success: true, data: record };
 }
 
 /**
- * Get user statistics
- * @param {string} userId - User ID
- * @returns {Promise<Object>} Response with user statistics
- */
-export async function getUserStats(userId) {
-  try {
-    const response = await fetch(`${BASE_URL}/users/${userId}/stats`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error('User not found.');
-      }
-      throw new Error(data.message || 'Failed to fetch user stats.');
-    }
-
-    return {
-      success: true,
-      data: data
-    };
-
-  } catch (error) {
-    console.error('Error fetching user stats:', error);
-
-    if (error.message === 'Failed to fetch' || error instanceof TypeError) {
-      throw new Error('Connection failed. Please check your internet connection and try again.');
-    }
-
-    throw error;
-  }
-}
-
-/**
- * Check API health status
- * @returns {Promise<Object>} Response with API health status
- */
-export async function checkHealth() {
-  try {
-    const response = await fetch(`${BASE_URL}/health`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error('API health check failed.');
-    }
-
-    return {
-      success: true,
-      status: data.status || 'healthy',
-      data: data
-    };
-
-  } catch (error) {
-    console.error('Error checking API health:', error);
-
-    if (error.message === 'Failed to fetch' || error instanceof TypeError) {
-      return {
-        success: false,
-        status: 'unreachable',
-        message: 'API is unreachable. Please check your internet connection.'
-      };
-    }
-
-    throw error;
-  }
-}
-
-/**
- * Generate or retrieve a user ID
- * Stores in localStorage for persistence
- * @returns {string} User ID
+ * Get or generate a stable Luron user ID (stored in localStorage).
  */
 export function getUserId() {
-  const STORAGE_KEY = 'queout_user_id';
-
-  // Check if user ID already exists in localStorage
-  let userId = localStorage.getItem(STORAGE_KEY);
-
-  if (!userId) {
-    // Generate a new unique user ID
-    userId = `user_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-    localStorage.setItem(STORAGE_KEY, userId);
+  const KEY = 'queout_user_id';
+  let id = localStorage.getItem(KEY);
+  if (!id) {
+    id = `user_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+    localStorage.setItem(KEY, id);
   }
-
-  return userId;
+  return id;
 }
 
-// Expose getCallDetails to window for easy testing in browser console
+// Dev helper — test call details from Safari console
 if (typeof window !== 'undefined') {
   window.getCallDetails = getCallDetails;
-  console.log('🔧 Debug: window.getCallDetails() is available for testing');
-  console.log('Usage: window.getCallDetails("call_b5eaea4d1895")');
 }

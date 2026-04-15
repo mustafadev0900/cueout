@@ -67,9 +67,16 @@ export const addToHistory = (call) =>
   withAuth((userId) =>
     supabaseQuery(() =>
       supabase.from('call_history').insert([{
-        ...call,
-        user_id: userId,
-        completed_at: new Date().toISOString()
+        user_id:          userId,
+        persona_id:       call.persona_id       || 'manager',
+        voice_id:         call.voice_id         || 'emma',
+        caller_id:        call.caller_id        ?? null,
+        contact_methods:  call.contact_methods  || ['call'],
+        context_note:     call.context_note     || '',
+        status:           call.status           || 'answered',
+        duration_seconds: call.duration_seconds ?? null,
+        scheduled_time:   call.scheduled_time   ?? null,
+        completed_at:     new Date().toISOString(),
       }]).select().single()
     )
   );
@@ -86,6 +93,11 @@ export const markHistoryItemAsRead = (historyId) =>
     supabase.from('call_history').update({ is_read: true }).eq('id', historyId)
   );
 
+export const updateHistoryItem = (historyId, updates) =>
+  supabaseQuery(() =>
+    supabase.from('call_history').update(updates).eq('id', historyId).select().single()
+  );
+
 export const deleteHistoryItem = (historyId) =>
   supabaseQuery(() =>
     supabase.from('call_history').delete().eq('id', historyId)
@@ -97,7 +109,7 @@ export const completeCall = (upcomingCall, status = 'answered') =>
       supabase.from('call_history').insert([{
         user_id: userId,
         persona_id: upcomingCall.persona_id,
-        voice_id: upcomingCall.voice_id,
+        voice_id: upcomingCall.voice_id || 'emma',
         caller_id: upcomingCall.caller_id,
         contact_methods: upcomingCall.contact_methods,
         context_note: upcomingCall.context_note,

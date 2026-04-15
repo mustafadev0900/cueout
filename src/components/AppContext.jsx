@@ -4,6 +4,7 @@ import {
   getUpcomingCalls as fetchUpcomingCalls,
   getCallHistory as fetchCallHistory,
   addToHistory as addHistoryItem,
+  updateHistoryItem as updateHistoryItemApi,
   deleteHistoryItem as removeHistoryItem,
   getUnreadHistoryCount as fetchUnreadCount,
   markHistoryAsRead,
@@ -21,7 +22,7 @@ import {
   initializeDefaultQuickSchedules,
   isAuthenticated
 } from '../api';
-import { getHistory as fetchLuronHistory } from '../api/luronApi';
+import { getHistory as fetchLuronHistory, getCallDetails, getUserId as getLuronUserId } from '../api/luronApi';
 import { useAuth } from './AuthContext';
 
 const AppContext = createContext();
@@ -68,20 +69,55 @@ export function AppProvider({ children }) {
   // Keep historyRef in sync with history state for use in closures
   useEffect(() => { historyRef.current = history; }, [history]);
 
+  // Map Luron call data → app status
+  // Luron always returns status:'completed' even when the call went to voicemail
+  // (user declined → voicemail → AI left a message → Luron says "completed").
+  // The only way to distinguish answered-by-human vs voicemail is call_context.
+  const mapLuronStatus = (luronData) => {
+    const status = typeof luronData === 'string' ? luronData : luronData?.status;
+    if (!status) return null;
+
+    const s = status.toLowerCase().replace(/[-_\s]/g, '');
+
+    if (s === 'completed' || s === 'answered') {
+      // Check call_context for voicemail indicators
+      const ctx = (typeof luronData === 'object' ? luronData?.call_context : '') || '';
+      const c = ctx.toLowerCase();
+      const wentToVoicemail =
+        c.includes('voicemail') ||
+        c.includes('leave a message') ||
+        c.includes('left a message') ||
+        c.includes('leaving a message') ||
+        c.includes('unable to reach') ||
+        c.includes('could not reach') ||
+        c.includes('saved the message') ||
+        c.includes('saved a message') ||
+        c.includes('recorded') ||
+        (c.includes('automated') && c.includes('system'));
+      return wentToVoicemail ? 'missed' : 'answered';
+    }
+    if (s === 'busy' || s === 'declined' || s === 'rejected') return 'declined';
+    if (s === 'noanswer' || s === 'missed') return 'missed';
+    if (s === 'failed' || s === 'canceled' || s === 'cancelled' || s === 'error') return 'failed';
+    // 'scheduled', 'queued', 'pending', 'inprogress' — still waiting
+    return null;
+  };
+
   // Map Supabase call_history row → consistent app shape used by History.jsx
   const normalizeHistoryItem = (item) => ({
     id:             item.id,
     persona:        item.persona    ?? item.persona_id    ?? 'manager',
-    personaName:    item.personaName ?? item.persona_id   ?? 'Unknown',
+    personaName:    (() => { const n = item.personaName ?? item.persona_id ?? 'Unknown'; return n.charAt(0).toUpperCase() + n.slice(1); })(),
     icon:           item.icon       ?? getPersonaIconStatic(item.persona_id),
     completedAt:    item.completedAt ?? item.completed_at,
-    status:         item.status     ?? 'completed',
+    status:         item.status     ?? 'scheduled',
     context:        item.context    ?? item.context_note  ?? '',
     contactMethods: item.contactMethods ?? item.contact_methods ?? ['call'],
     voice:          item.voice      ?? item.voice_id      ?? 'emma',
     callerId:       item.callerId   ?? item.caller_id     ?? null,
     duration:       item.duration   ?? item.duration_seconds ?? 0,
     is_read:        item.is_read    ?? true,
+    luron_call_id:  item.luron_call_id ?? null,
   });
 
   // Normalize quick schedule from Supabase flat structure to app's nested preset structure
@@ -163,7 +199,10 @@ export function AppProvider({ children }) {
         fetchUnreadCount().catch(() => 0)
       ]);
 
-      setUpcomingCalls(calls);
+      setUpcomingCalls(prev => {
+        const prevMap = new Map(prev.map(c => [c.id, c]));
+        return (calls || []).map(c => normalizeUpcomingCall(c, prevMap.get(c.id)));
+      });
       setHistory((historyData || []).map(normalizeHistoryItem));
       setCallerIDs(callerIdsData);
       setQuickSchedules(schedulesData.map(normalizeQuickSchedule));
@@ -297,7 +336,7 @@ export function AppProvider({ children }) {
     const historyItem = {
       ...call,
       completed_at: new Date().toISOString(),
-      status: 'answered', // DB constraint: only 'answered' or 'missed' allowed
+      status: call.status || 'scheduled',
     };
     try {
       // withAuth in addHistoryItem handles auth independently — no isAuth gate needed
@@ -314,16 +353,134 @@ export function AppProvider({ children }) {
     }
   };
 
+  // General-purpose history record updater — updates local state + Supabase atomically
+  const updateHistoryItem = async (id, updates) => {
+    setHistory(prev => prev.map(h => h.id === id ? { ...h, ...updates } : h));
+    try {
+      await updateHistoryItemApi(id, updates);
+    } catch (e) {
+      console.error('Error updating history item:', e);
+    }
+  };
+
+  // Convenience wrapper used by handleCompleteCall
+  const updateHistoryStatus = (id, status) => updateHistoryItem(id, { status });
+
   const refreshHistory = async () => {
     try {
       const data = await fetchCallHistory().catch(() => []);
       const normalized = (data || []).map(normalizeHistoryItem);
-      setHistory(normalized);
+      // Merge: if local state has a more final status than Supabase (e.g. optimistic
+      // 'missed' written before the DB write completes), keep the local value so we
+      // don't flash back to 'scheduled' on every page visit.
+      const STATUS_RANK = { scheduled: 0, missed: 1, answered: 2, declined: 2, failed: 2 };
+      setHistory(prev => {
+        const localMap = new Map(prev.map(h => [h.id, h]));
+        return normalized.map(serverItem => {
+          const local = localMap.get(serverItem.id);
+          if (!local) return serverItem;
+          const localRank  = STATUS_RANK[local.status]      ?? 0;
+          const serverRank = STATUS_RANK[serverItem.status] ?? 0;
+          if (localRank > serverRank) {
+            return {
+              ...serverItem,
+              status:        local.status,
+              luron_call_id: local.luron_call_id || serverItem.luron_call_id,
+            };
+          }
+          return {
+            ...serverItem,
+            luron_call_id: serverItem.luron_call_id || local.luron_call_id,
+          };
+        });
+      });
       return normalized;
     } catch (error) {
       console.error('Error refreshing history:', error);
       return historyRef.current;
     }
+  };
+
+  // Poll Luron for real call outcomes and update Supabase + local state
+  const syncPendingStatuses = async () => {
+    // Process 'scheduled' calls + re-verify 'answered'/'missed' calls that have a
+    // luron_call_id so any optimistic statuses get corrected by Luron's real outcome.
+    const pending = historyRef.current.filter(h =>
+      h.status === 'scheduled' ||
+      ((h.status === 'answered' || h.status === 'missed') && h.luron_call_id)
+    );
+    if (pending.length === 0) return;
+
+    // Build a lookup map from Luron history (call_id → record)
+    let luronById = {};
+    try {
+      const luronResult = await fetchLuronHistory(getLuronUserId());
+      console.log('📡 syncPendingStatuses: Luron history:', luronResult);
+      (luronResult.history || []).forEach(lh => {
+        if (lh.call_id) luronById[lh.call_id] = lh;
+      });
+    } catch (e) {
+      console.error('syncPendingStatuses: Luron fetch failed', e);
+    }
+
+    const updates = [];
+
+    for (const call of pending) {
+      let luronData = null;
+
+      // 1. Match by stored luron_call_id (most reliable)
+      if (call.luron_call_id) {
+        if (luronById[call.luron_call_id]) {
+          luronData = luronById[call.luron_call_id];
+        } else {
+          // Try direct call detail lookup
+          try {
+            const r = await getCallDetails(call.luron_call_id);
+            if (r.success && r.data) luronData = r.data;
+          } catch { /* ignore */ }
+        }
+      }
+
+      // Time-based fallback intentionally removed — causes false positives when
+      // multiple calls exist within the same time window.
+
+      if (!luronData) {
+        console.log('⚠️ syncPendingStatuses: no match for call', call.id, '| luron_call_id:', call.luron_call_id ?? 'NULL');
+        continue;
+      }
+
+      console.log('🔍 syncPendingStatuses: matched call', call.id, '| status:', luronData.status, '| voicemail?', (luronData.call_context || '').toLowerCase().includes('voicemail') || (luronData.call_context || '').toLowerCase().includes('leave a message'));
+      const mapped = mapLuronStatus(luronData); // pass full object for call_context check
+      if (!mapped) {
+        console.log('⏳ syncPendingStatuses: status not final yet (', luronData.status, ') — skipping');
+        continue;
+      }
+      if (mapped === call.status) continue; // no change needed
+
+      updates.push({
+        id: call.id,
+        status: mapped,
+        luron_call_id: call.luron_call_id || luronData.call_id || null,
+      });
+    }
+
+    if (updates.length === 0) return;
+
+    // Write to Supabase — status + luron_call_id so matches survive page reloads
+    await Promise.allSettled(
+      updates.map(u =>
+        supabase.from('call_history').update({
+          status: u.status,
+          ...(u.luron_call_id ? { luron_call_id: u.luron_call_id } : {}),
+        }).eq('id', u.id)
+      )
+    );
+
+    // Update local state immediately
+    setHistory(prev => prev.map(h => {
+      const u = updates.find(x => x.id === h.id);
+      return u ? { ...h, status: u.status, luron_call_id: u.luron_call_id ?? h.luron_call_id } : h;
+    }));
   };
 
   const deleteFromHistory = async (id) => {
@@ -462,6 +619,21 @@ export function AppProvider({ children }) {
     return iconMap[personaType] || '✨';
   };
 
+  const getPersonaNameStatic = (personaId) => {
+    const nameMap = {
+      manager: 'Manager', coordinator: 'Coordinator', service: 'Service',
+      friend: 'Friend', mom: 'Mom', doctor: 'Doctor', boss: 'Boss',
+    };
+    return nameMap[personaId] || personaId;
+  };
+
+  // Restore UI-only display fields that are stripped before DB insert
+  const normalizeUpcomingCall = (serverCall, cached) => ({
+    ...serverCall,
+    persona: cached?.persona || serverCall.persona || getPersonaNameStatic(serverCall.persona_id),
+    icon:    cached?.icon    || serverCall.icon    || getPersonaIconStatic(serverCall.persona_id),
+  });
+
   return (
     <AppContext.Provider value={{
       // Data
@@ -491,8 +663,11 @@ export function AppProvider({ children }) {
 
       // History
       addToHistory,
+      updateHistoryItem,
+      updateHistoryStatus,
       deleteFromHistory,
       refreshHistory,
+      syncPendingStatuses,
       clearUnreadHistory,
 
       // Quick Schedules

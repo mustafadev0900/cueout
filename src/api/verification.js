@@ -4,7 +4,6 @@
  */
 
 import { supabase } from '../lib/supabase';
-import { scheduleCall as scheduleLuronCall } from './luronApi';
 
 /**
  * Generate a 6-digit verification code
@@ -62,34 +61,23 @@ export async function sendVerificationCall(params) {
     // Calculate expiration (10 minutes from now)
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-    // Format code for clear speech
-    const speechCode = formatCodeForSpeech(code);
-
     // Format full phone number with country code
     const fullPhoneNumber = `${countryCode}${phoneNumber}`;
 
-    // Schedule verification call via Luron API
-    // Work with the conversational AI - give explicit instructions to say the code immediately
-    const verificationMessage = `You must immediately say the following verification code to the person who answers. Do not ask questions. Just say: "Your CueOut verification code is ${speechCode}. Again, your code is ${speechCode}. Goodbye." Then end the call.`;
-
-    const luronResponse = await scheduleLuronCall({
-      userId,
-      contactMethods: ['call'], // Back to voice call
-      selectedTime: 'now', // Immediate call
-      selectedPersona: 'customer_support',
-      note: verificationMessage,
-      selectedVoice: 'emma',
-      selectedCallerID: null,
-      recipientPhone: fullPhoneNumber, // Pass the phone number being verified
-      personaConfig: {
-        tone: 'friendly',
-        duration: 30,
-        customPhrases: `Your CueOut verification code is ${speechCode}. Again, your code is ${speechCode}.`
-      }
+    // Use the dedicated /verify endpoint — purpose-built for OTP, no greeting
+    const verifyRes = await fetch('https://luron-api.onrender.com/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        verification_code: code,
+        phone_number: fullPhoneNumber,
+        method: 'call',
+      }),
     });
-
-    if (!luronResponse.success) {
-      throw new Error('Failed to schedule verification call');
+    const luronResponse = await verifyRes.json();
+    if (!verifyRes.ok) {
+      throw new Error(luronResponse.message || 'Failed to initiate verification call');
     }
 
     // Store verification in Supabase

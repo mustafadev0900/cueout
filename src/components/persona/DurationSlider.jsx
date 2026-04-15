@@ -74,7 +74,7 @@ export default function DurationSlider({ value, onChange }) {
             : 'bg-zinc-800/30 border-zinc-800'
         }`}>
           <div className="text-xs text-zinc-400 mb-1">Quick</div>
-          <div className="text-sm font-semibold">15-30s</div>
+          <div className="text-sm font-semibold">15-29s</div>
         </div>
         <div className={`p-3 rounded-xl border transition-all ${
           value >= 30 && value <= 60 
