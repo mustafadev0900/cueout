@@ -5,12 +5,14 @@ import { useAuth } from '../components/AuthContext';
 import { createPageUrl } from '../components/utils';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabase';
-import { 
-  User, 
-  Mail, 
-  Phone, 
-  CheckCircle2, 
-  Crown, 
+import { cancelSubscription } from '../api/subscriptions';
+import PullToRefresh from '../components/PullToRefresh';
+import {
+  User,
+  Mail,
+  Phone,
+  CheckCircle2,
+  Crown,
   ChevronRight,
   Bell,
   Sparkles,
@@ -21,7 +23,8 @@ import {
   Smartphone,
   Edit2,
   X,
-  Volume2
+  Volume2,
+  AlertTriangle
 } from 'lucide-react';
 
 export default function Account() {
@@ -46,8 +49,10 @@ export default function Account() {
   const [showRingtoneSelector, setShowRingtoneSelector] = useState(false);
   const [showCallerIDEditor, setShowCallerIDEditor] = useState(false);
   const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const navigate = useNavigate();
-  const { callerIDs, updateCallerIDName, setIsTabBarHidden } = useApp();
+  const { callerIDs, updateCallerIDName, setIsTabBarHidden, subscription, refreshSubscription } = useApp();
   const { user, signOut, checkUser } = useAuth();
 
   const ringtones = ['Default', 'Classic', 'Modern', 'Gentle', 'Urgent'];
@@ -64,9 +69,9 @@ export default function Account() {
     }
   }, [showRingtoneSelector, showCallerIDEditor, setIsTabBarHidden]);
 
-  // On mount, force a fresh fetch from server so we always have the latest email
+  // Only re-fetch subscription if we don't have it yet (AppContext handles initial load)
   useEffect(() => {
-    checkUser();
+    if (!subscription) refreshSubscription().catch(() => {});
   }, []);
 
   // Load user data from Supabase
@@ -192,7 +197,12 @@ export default function Account() {
     );
   }
 
+  const handleRefresh = async () => {
+    await refreshSubscription().catch(() => {});
+  };
+
   return (
+    <PullToRefresh onRefresh={handleRefresh}>
     <div className="min-h-full bg-black px-6 pt-safe pb-safe overflow-x-hidden">
       <div className="fixed inset-0 bg-gradient-to-b from-red-950/10 via-black to-black pointer-events-none" />
 
@@ -366,25 +376,112 @@ export default function Account() {
             <h3 className="font-semibold text-base text-white">Your Plan</h3>
           </div>
 
-          <div className="mb-4 p-3 bg-zinc-800/50 rounded-xl">
-            <div className="flex items-center justify-between mb-2">
+          <div className="mb-4 p-3 bg-zinc-800/50 rounded-xl space-y-2.5">
+            <div className="flex items-center justify-between">
               <span className="text-zinc-400 text-xs">Current Plan</span>
-              <span className="px-2.5 py-1 bg-zinc-700 rounded-full text-xs font-semibold text-white">Free</span>
+              {subscription?.tier === 'plus' ? (
+                <span className="px-2.5 py-1 bg-gradient-to-r from-red-500 to-red-600 rounded-full text-xs font-bold text-white">Plus</span>
+              ) : (
+                <span className="px-2.5 py-1 bg-zinc-700 rounded-full text-xs font-semibold text-white">Free</span>
+              )}
             </div>
+
             <div className="flex items-center justify-between">
               <span className="text-zinc-400 text-xs">Calls remaining</span>
-              <span className="font-semibold text-sm text-red-400">1 of 2 left</span>
+              <span className={`font-semibold text-sm ${
+                !subscription || subscription.calls_remaining === 0
+                  ? 'text-red-400'
+                  : subscription.calls_remaining <= 3
+                  ? 'text-yellow-400'
+                  : 'text-green-400'
+              }`}>
+                {subscription
+                  ? `${subscription.calls_remaining} of ${subscription.calls_limit} left`
+                  : '—'}
+              </span>
             </div>
+
+            {subscription?.calls_limit > 0 && (
+              <div className="w-full h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    subscription.calls_remaining === 0
+                      ? 'bg-red-500'
+                      : subscription.calls_remaining <= 3
+                      ? 'bg-yellow-400'
+                      : 'bg-green-500'
+                  }`}
+                  style={{ width: `${(subscription.calls_remaining / subscription.calls_limit) * 100}%` }}
+                />
+              </div>
+            )}
+
+            {subscription?.expires_at && (
+              <div className="flex items-center justify-between">
+                <span className="text-zinc-400 text-xs">
+                  {subscription.auto_renew ? 'Renews' : 'Expires'}
+                </span>
+                <span className="text-zinc-300 text-xs">
+                  {new Date(subscription.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+              </div>
+            )}
           </div>
 
-          <button
-            onClick={handleUpgrade}
-            className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-3 rounded-full transition-all duration-200 flex items-center justify-center gap-2 text-sm"
-          >
-            <Crown className="w-4 h-4" />
-            <span>Upgrade to Plus</span>
-            <ChevronRight className="w-4 h-4" />
-          </button>
+          {subscription?.tier === 'plus' ? (
+            showCancelConfirm ? (
+              <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
+                <div className="flex items-start gap-2 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-300 leading-relaxed">
+                    Cancel your Plus subscription? You'll keep access until your billing period ends.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => {
+                      setIsCancelling(true);
+                      try {
+                        await cancelSubscription();
+                        await refreshSubscription();
+                        setShowCancelConfirm(false);
+                      } catch (e) {
+                        console.error('Cancel error:', e);
+                      } finally {
+                        setIsCancelling(false);
+                      }
+                    }}
+                    disabled={isCancelling}
+                    className="flex-1 py-2 bg-red-500 hover:bg-red-600 disabled:opacity-50 text-white text-xs font-semibold rounded-full transition-all"
+                  >
+                    {isCancelling ? 'Cancelling...' : 'Yes, Cancel'}
+                  </button>
+                  <button
+                    onClick={() => setShowCancelConfirm(false)}
+                    className="flex-1 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-xs font-semibold rounded-full transition-all"
+                  >
+                    Keep Plus
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowCancelConfirm(true)}
+                className="w-full text-zinc-500 hover:text-zinc-300 text-xs py-2 transition-colors"
+              >
+                Cancel subscription
+              </button>
+            )
+          ) : (
+            <button
+              onClick={handleUpgrade}
+              className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-3 rounded-full transition-all duration-200 flex items-center justify-center gap-2 text-sm"
+            >
+              <Crown className="w-4 h-4" />
+              <span>Upgrade to Plus</span>
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          )}
         </motion.div>
 
         <motion.div
@@ -667,6 +764,7 @@ export default function Account() {
         )}
       </AnimatePresence>
     </div>
+    </PullToRefresh>
   );
 }
 

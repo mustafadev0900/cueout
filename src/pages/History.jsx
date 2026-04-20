@@ -7,6 +7,7 @@ import CallHistoryItem from '../components/CallHistoryItem';
 import { useApp } from '../components/AppContext';
 import { usePersona } from '../components/PersonaContext';
 import EditScheduleModal from '../components/EditScheduleModal';
+import PullToRefresh from '../components/PullToRefresh';
 
 // Voices definition
 const voices = [
@@ -137,17 +138,18 @@ export default function History() {
     // Clear unread badge when entering history page
     clearUnreadHistory();
 
-    // Refresh history from Supabase
+    // Fix 1 & 2: Load Supabase history first (fast), then sync Luron in background (slow)
     const fetchHistory = async () => {
       setIsLoadingHistory(true);
       try {
         await refreshHistory();
-        await syncPendingStatuses();
       } catch (error) {
         console.error('Error fetching history:', error);
       } finally {
         setIsLoadingHistory(false);
       }
+      // Run Luron sync silently in background — doesn't block the screen from showing
+      syncPendingStatuses().catch(() => {});
     };
 
     fetchHistory();
@@ -230,7 +232,13 @@ export default function History() {
     setEditingSchedule(newSchedule);
   };
 
+  const handleRefresh = async () => {
+    await refreshHistory().catch(() => {});
+    syncPendingStatuses().catch(() => {});
+  };
+
   return (
+    <PullToRefresh onRefresh={handleRefresh}>
     <div className="min-h-full bg-black px-6 pt-safe pb-safe">
       <div className="fixed inset-0 bg-gradient-to-b from-red-950/10 via-black to-black pointer-events-none" />
 
@@ -257,7 +265,7 @@ export default function History() {
                 <span className="text-xs font-medium text-zinc-400">Total Calls</span>
               </div>
               <p className="text-3xl font-bold text-white tracking-tight">
-                {history.length} <span className="text-lg text-zinc-500 font-medium">/ 20</span>
+                {history.length} <span className="text-lg text-zinc-500 font-medium"></span>
               </p>
             </div>
           </motion.div>
@@ -386,47 +394,62 @@ export default function History() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center pb-safe"
             onClick={() => setSelectedCall(null)}
           >
             <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', damping: 32, stiffness: 320 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-[380px] bg-zinc-900 rounded-3xl p-6 max-h-[600px] overflow-y-auto"
-              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+              className="w-full bg-zinc-900 rounded-3xl overflow-y-auto"
+              style={{
+                maxWidth: 'min(520px, 100vw)',
+                maxHeight: '82dvh',
+                padding: 'clamp(16px, 4vw, 24px)',
+                paddingTop: 12,
+                scrollbarWidth: 'none',
+                msOverflowStyle: 'none',
+              }}
             >
-              <div className="flex items-start gap-4 mb-6 pb-6 border-b border-zinc-800">
-                <div className="w-16 h-16 bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center text-3xl shadow-lg">
+              {/* Drag handle */}
+              <div className="w-10 h-1 bg-zinc-700 rounded-full mx-auto mb-4" />
+
+              <div className="flex items-start gap-3 mb-4 pb-4 border-b border-zinc-800">
+                <div
+                  className="bg-gradient-to-br from-red-500 to-red-600 rounded-full flex items-center justify-center shadow-lg flex-shrink-0"
+                  style={{ width: 'clamp(44px, 11vw, 56px)', height: 'clamp(44px, 11vw, 56px)', fontSize: 'clamp(20px, 5.5vw, 26px)' }}
+                >
                   {selectedCall.icon}
                 </div>
-                <div className="flex-1">
-                  <h2 className="text-2xl font-bold mb-1 text-white">{selectedCall.personaName}</h2>
-                  <div className="flex items-center gap-2 text-sm text-zinc-400">
-                    <Clock className="w-4 h-4" />
-                    <span>{formatHistoryDate(selectedCall.completedAt)}</span>
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-bold mb-1 text-white truncate" style={{ fontSize: 'clamp(15px, 4.5vw, 20px)' }}>
+                    {selectedCall.personaName}
+                  </h2>
+                  <div className="flex items-center gap-1.5 text-zinc-400" style={{ fontSize: 'clamp(11px, 2.8vw, 13px)' }}>
+                    <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span className="truncate">{formatHistoryDate(selectedCall.completedAt)}</span>
                   </div>
                 </div>
-                <div className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                <div className={`px-2.5 py-1 rounded-full font-semibold flex-shrink-0 ${
                   selectedCall.status === 'answered'  ? 'bg-green-500/20 text-green-400' :
                   selectedCall.status === 'declined'  ? 'bg-red-500/20 text-red-400' :
                   selectedCall.status === 'scheduled' ? 'bg-yellow-500/20 text-yellow-400' :
                   'bg-zinc-700 text-zinc-400'
-                }`}>
+                }`} style={{ fontSize: 'clamp(9px, 2.4vw, 11px)' }}>
                   {selectedCall.status === 'answered'  ? '✓ Answered'  :
                    selectedCall.status === 'declined'  ? '✕ Declined'  :
-                   selectedCall.status === 'scheduled' ? '⏳ Pending'  :
+                   selectedCall.status === 'scheduled' ? '⏳ Pending' :
                    selectedCall.status === 'missed'    ? '✕ Missed'    :
                    '✕ Missed'}
                 </div>
               </div>
 
-              <div className="space-y-4 mb-6">
-                <div className="flex items-center justify-between py-3 border-b border-zinc-800">
-                  <span className="text-zinc-400">Duration</span>
-                  <span className="font-semibold text-white">
+              <div className="mb-4">
+                <div className="flex items-center justify-between py-2.5 border-b border-zinc-800">
+                  <span className="text-zinc-400 text-sm">Duration</span>
+                  <span className="font-semibold text-white text-sm">
                     {selectedCall.duration
                       ? (typeof selectedCall.duration === 'number'
                         ? `${Math.floor(selectedCall.duration / 60)}:${(selectedCall.duration % 60).toString().padStart(2, '0')}`
@@ -434,15 +457,15 @@ export default function History() {
                       : '0:30'}
                   </span>
                 </div>
-                <div className="flex items-center justify-between py-3 border-b border-zinc-800">
-                  <span className="text-zinc-400">Scheduled</span>
-                  <span className="font-semibold text-white">
+                <div className="flex items-center justify-between py-2.5 border-b border-zinc-800">
+                  <span className="text-zinc-400 text-sm">Scheduled</span>
+                  <span className="font-semibold text-white text-sm">
                     {formatHistoryDate(selectedCall.completedAt) || selectedCall.scheduledTime}
                   </span>
                 </div>
-                <div className="flex items-center justify-between py-3 border-b border-zinc-800">
-                  <span className="text-zinc-400">Status</span>
-                  <span className={`font-semibold ${
+                <div className="flex items-center justify-between py-2.5 border-b border-zinc-800">
+                  <span className="text-zinc-400 text-sm">Status</span>
+                  <span className={`font-semibold text-sm ${
                     selectedCall.status === 'answered'  ? 'text-green-400'  :
                     selectedCall.status === 'declined'  ? 'text-red-400'    :
                     selectedCall.status === 'scheduled' ? 'text-yellow-400' :
@@ -459,37 +482,36 @@ export default function History() {
               </div>
 
               {selectedCall.context && (
-                <div className="mb-6">
-                  <h3 className="text-sm font-semibold text-zinc-400 mb-3">Call Context</h3>
-                  <div className="bg-zinc-800/50 rounded-2xl p-4">
-                    <p className="text-white leading-relaxed">{selectedCall.context}</p>
+                <div className="mb-4">
+                  <h3 className="text-xs font-semibold text-zinc-400 mb-2">Call Context</h3>
+                  <div className="bg-zinc-800/50 rounded-2xl p-3">
+                    <p className="text-white text-sm leading-relaxed">{selectedCall.context}</p>
                   </div>
                 </div>
               )}
 
-              <div className="space-y-3">
+              <div className="space-y-2.5 pb-2">
                 <button
-                  onClick={() => {
-                    handleRepeatSetup(selectedCall);
-                    setSelectedCall(null);
-                  }}
-                  className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold py-4 rounded-full transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-red-500/30"
+                  onClick={() => { handleRepeatSetup(selectedCall); setSelectedCall(null); }}
+                  className="w-full bg-gradient-to-r from-red-500 to-red-600 text-white font-bold rounded-full flex items-center justify-center gap-2 shadow-lg shadow-red-500/30 transition-all"
+                  style={{ padding: 'clamp(12px, 3.5vw, 15px) 24px' }}
                 >
-                  <span>Repeat this setup</span>
-                  <ChevronRight className="w-5 h-5" />
+                  <span style={{ fontSize: 'clamp(13px, 3.5vw, 15px)' }}>Repeat this setup</span>
+                  <ChevronRight className="w-4 h-4" />
                 </button>
-                
+
                 <button
                   onClick={() => handleAddToQuickSchedule(selectedCall)}
-                  className="w-full bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-4 rounded-full transition-colors flex items-center justify-center gap-2"
+                  className="w-full bg-zinc-800 text-white font-semibold rounded-full flex items-center justify-center gap-2 transition-colors"
+                  style={{ padding: 'clamp(12px, 3.5vw, 15px) 24px' }}
                 >
-                  <Plus className="w-5 h-5" />
-                  <span>Add to Quick Schedule</span>
+                  <Plus className="w-4 h-4" />
+                  <span style={{ fontSize: 'clamp(13px, 3.5vw, 15px)' }}>Add to Quick Schedule</span>
                 </button>
-                
+
                 <button
                   onClick={() => setSelectedCall(null)}
-                  className="w-full text-zinc-500 hover:text-white font-semibold py-2 transition-colors text-sm"
+                  className="w-full text-zinc-500 font-semibold py-2 transition-colors text-sm"
                 >
                   Close
                 </button>
@@ -528,5 +550,6 @@ export default function History() {
         )}
       </AnimatePresence>
     </div>
+    </PullToRefresh>
   );
 }

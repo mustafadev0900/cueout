@@ -45,8 +45,10 @@ export const updateSubscriptionTier = (tier, billingCycle, stripeSubscriptionId 
       ? { calls_limit: 20, texts_limit: 999999 }
       : { calls_limit: 2, texts_limit: 0 };
 
+    // upsert handles both new users (no row yet) and existing users
     const data = await supabaseQuery(() =>
-      supabase.from('subscriptions').update({
+      supabase.from('subscriptions').upsert({
+        user_id: userId,
         tier,
         billing_cycle: billingCycle,
         calls_limit: limits.calls_limit,
@@ -59,7 +61,7 @@ export const updateSubscriptionTier = (tier, billingCycle, stripeSubscriptionId 
           ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
           : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
         auto_renew: true
-      }).eq('user_id', userId).select().single()
+      }, { onConflict: 'user_id' }).select().single()
     );
 
     await supabaseQuery(() =>

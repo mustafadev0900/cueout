@@ -121,17 +121,21 @@ export default function PersonaSettings() {
                 <h1 className="text-xl font-bold text-white">{name} settings</h1>
               </div>
             </div>
-            <button
-              onClick={handleSave}
-              className="p-2 -mr-2 bg-red-500 hover:bg-red-600 rounded-full transition-colors"
-            >
-              <Check className="w-5 h-5 text-white" />
-            </button>
+            {isCustomPersona ? (
+              <button
+                onClick={handleSave}
+                className="p-2 -mr-2 bg-red-500 hover:bg-red-600 rounded-full transition-colors"
+              >
+                <Check className="w-5 h-5 text-white" />
+              </button>
+            ) : (
+              <div className="w-9" />
+            )}
           </div>
         </div>
 
-        <div className="px-6 py-6 max-w-md mx-auto space-y-6">
-          
+        <div className={`px-6 py-6 max-w-md mx-auto space-y-6 ${!isCustomPersona ? 'pointer-events-none opacity-60' : ''}`}>
+
           {/* Preview moved to top */}
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-br from-red-500/20 to-orange-500/20 blur-2xl" />
@@ -209,7 +213,7 @@ export default function PersonaSettings() {
                 />
               </div>
 
-              {isCustomPersona && (
+              {/* {isCustomPersona && (
                 <div>
                   <label className="block text-xs font-semibold text-zinc-400 mb-1">Call Behavior</label>
                   <p className="text-xs text-zinc-500 mb-3">Which AI character should this persona act like on calls?</p>
@@ -233,7 +237,7 @@ export default function PersonaSettings() {
                     ))}
                   </div>
                 </div>
-              )}
+              )} */}
             </div>
           </div>
 

@@ -74,6 +74,11 @@ button:focus-visible {
 
 
 
+/* Remove 300ms tap delay on all interactive elements in iOS WKWebView */
+a, button, [role="button"], input, select, textarea, label {
+  touch-action: manipulation;
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;

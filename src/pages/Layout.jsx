@@ -12,17 +12,24 @@ function TabBar({ tabs, location }) {
   if (isTabBarHidden) return null;
 
   return (
-    <div className="bg-zinc-900/95 backdrop-blur-md border border-zinc-800 rounded-full shadow-2xl shadow-black px-6 py-3 flex gap-2 pointer-events-auto">
+    <div
+      className="bg-zinc-900/95 backdrop-blur-md border border-zinc-800 rounded-full shadow-2xl shadow-black flex pointer-events-auto"
+      style={{
+        width: 'min(calc(100vw - 48px), 380px)',
+        padding: 'clamp(8px, 2vw, 12px) clamp(10px, 3vw, 16px)',
+        gap: 'clamp(4px, 1.5vw, 8px)',
+      }}
+    >
       {tabs.map((tab) => {
         const isActive = location.pathname === tab.path;
         const Icon = tab.icon;
         const isHistory = tab.name === 'History';
-        
+
         return (
           <Link
             key={tab.name}
             to={tab.path}
-            className={`relative flex flex-col items-center gap-1 px-6 py-2 rounded-full transition-all duration-200 active:scale-95 ${
+            className={`relative flex-1 flex flex-col items-center gap-1 py-2 rounded-full transition-all duration-200 active:scale-95 ${
               isActive ? 'bg-red-500/20' : 'active:bg-zinc-800/50'
             }`}
           >
@@ -30,12 +37,18 @@ function TabBar({ tabs, location }) {
               <div className="absolute inset-0 bg-red-500/20 blur-xl rounded-full" />
             )}
             <div className={`relative ${isActive ? 'text-red-500' : 'text-zinc-400'}`}>
-              <Icon className="w-6 h-6" strokeWidth={isActive ? 2.5 : 2} />
+              <Icon
+                style={{ width: 'clamp(20px, 5vw, 24px)', height: 'clamp(20px, 5vw, 24px)' }}
+                strokeWidth={isActive ? 2.5 : 2}
+              />
               {isHistory && unreadHistoryCount > 0 && (
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-zinc-900" />
+                <div className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-zinc-900" />
               )}
             </div>
-            <span className={`relative text-[10px] font-semibold ${isActive ? 'text-red-500' : 'text-zinc-400'}`}>
+            <span
+              className={`relative font-semibold ${isActive ? 'text-red-500' : 'text-zinc-400'}`}
+              style={{ fontSize: 'clamp(9px, 2.5vw, 11px)' }}
+            >
               {tab.label}
             </span>
           </Link>

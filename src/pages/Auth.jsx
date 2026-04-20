@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../components/utils';
-import { Mail, Lock, Apple, AlertCircle } from 'lucide-react';
+import { Mail, Lock, Apple, AlertCircle, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../components/AuthContext';
 import { getVerificationStatus } from '../api/verification';
@@ -12,7 +12,6 @@ export default function Auth() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [debugInfo, setDebugInfo] = useState('');
   const navigate = useNavigate();
   const { signIn, signUp, signInWithApple, isAuthenticated, user } = useAuth();
 
@@ -20,27 +19,14 @@ export default function Auth() {
   useEffect(() => {
     const checkAndRedirect = async () => {
       if (isAuthenticated && user) {
-        setDebugInfo(`Checking user: ${user.id}`);
-        console.log('🔍 Auth.jsx - Checking verification for user:', user.id);
         try {
           const verificationStatus = await getVerificationStatus(user.id);
-          console.log('📱 Verification Status:', verificationStatus);
-
-          setDebugInfo(`Phone: ${verificationStatus.phoneNumber || 'NULL'} | Verified: ${verificationStatus.isVerified}`);
-
           if (verificationStatus.isVerified) {
-            setDebugInfo('Phone verified → Home');
-            console.log('✅ Phone verified - redirecting to Home');
             setTimeout(() => navigate(createPageUrl('Home')), 500);
           } else {
-            setDebugInfo('Phone NOT verified → PhoneVerification');
-            console.log('❌ Phone NOT verified - redirecting to PhoneVerification');
             setTimeout(() => navigate(createPageUrl('PhoneVerification')), 500);
           }
         } catch (error) {
-          console.error('Error checking verification status:', error);
-          setDebugInfo(`Error: ${error.message} → PhoneVerification`);
-          console.log('⚠️ Error occurred - redirecting to PhoneVerification');
           setTimeout(() => navigate(createPageUrl('PhoneVerification')), 500);
         }
       }
@@ -88,17 +74,6 @@ export default function Auth() {
     <div className="min-h-screen bg-black flex flex-col items-center justify-center px-6 pt-safe pb-safe">
       <div className="fixed inset-0 bg-gradient-to-b from-red-950/30 via-black to-black" />
 
-      {/* Debug Panel - Remove after testing */}
-      {debugInfo && (
-        <div className="fixed top-4 left-4 right-4 bg-yellow-500/90 text-black p-4 rounded-lg text-xs font-mono z-50">
-          <div className="font-bold mb-1">DEBUG:</div>
-          <div>{debugInfo}</div>
-          <div className="mt-2 text-[10px]">
-            Auth: {isAuthenticated ? 'YES' : 'NO'} | User: {user ? user.id.substring(0, 8) : 'NONE'}
-          </div>
-        </div>
-      )}
-      
       <div className="relative w-full max-w-lg mx-auto">
         <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 mb-4">
@@ -195,7 +170,12 @@ export default function Auth() {
               disabled={isLoading}
               className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-4 rounded-full shadow-lg shadow-red-500/30 transition-all duration-200 active:scale-95 mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoading ? 'Loading...' : 'Continue'}
+              {isLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Please wait...
+                </span>
+              ) : 'Continue'}
             </button>
           </form>
 
@@ -210,7 +190,7 @@ export default function Auth() {
             disabled={isLoading}
             className="w-full bg-white text-black font-semibold py-4 rounded-full flex items-center justify-center gap-3 hover:bg-zinc-100 transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Apple className="w-5 h-5 fill-current" />
+            <img src="/appleLogo.png" alt="Apple" className="w-5 h-5" />
             Continue with Apple
           </button>
 

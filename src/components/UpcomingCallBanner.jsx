@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { X, Edit2, CheckCircle2, Trash2, AlertCircle } from 'lucide-react';
 import { useApp } from './AppContext';
@@ -7,6 +7,10 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
   const { updateUpcomingCall } = useApp();
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [isCompleted, setIsCompleted] = useState(false);
+
+  // Always hold the latest onComplete so the interval never fires a stale closure
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => { onCompleteRef.current = onComplete; });
 
   const calculateTimeLeft = () => {
     const ts = call.due_timestamp || call.dueTimestamp;
@@ -26,7 +30,7 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
     
     if (initial <= 0 && !isCompleted) {
       setIsCompleted(true);
-      onComplete?.();
+      onCompleteRef.current?.();
       return;
     }
 
@@ -36,7 +40,7 @@ export default function UpcomingCallBanner({ call, onCancel, onEdit, onComplete 
       if (remaining <= 0) {
         clearInterval(interval);
         setIsCompleted(true);
-        onComplete?.();
+        onCompleteRef.current?.();
       }
     }, 1000);
 

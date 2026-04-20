@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../components/utils';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Crown, Check, Phone, Users, MessageSquare, Sparkles } from 'lucide-react';
+import { X, Crown, Check, Phone, Users, MessageSquare, Sparkles, AlertCircle } from 'lucide-react';
 import FeatureDetailModal from '../components/FeatureDetailModal';
+import { updateSubscriptionTier } from '../api/subscriptions';
+import { useApp } from '../components/AppContext';
 
 const featuresList = [
   {
@@ -65,7 +67,29 @@ const features = {
 export default function Paywall() {
   const [billingCycle, setBillingCycle] = useState('monthly');
   const [selectedFeature, setSelectedFeature] = useState(null);
+  const [isUpgrading, setIsUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState('');
   const navigate = useNavigate();
+  const { subscription, refreshSubscription } = useApp();
+
+  const handleUpgrade = async () => {
+    if (subscription?.tier === 'plus') {
+      navigate(createPageUrl('Account'), { replace: true });
+      return;
+    }
+    setIsUpgrading(true);
+    setUpgradeError('');
+    try {
+      await updateSubscriptionTier('plus', billingCycle);
+      await refreshSubscription();
+      navigate(createPageUrl('Home'), { replace: true });
+    } catch (err) {
+      console.error('Upgrade error:', err);
+      setUpgradeError(err.message || 'Something went wrong. Please try again.');
+    } finally {
+      setIsUpgrading(false);
+    }
+  };
 
   const pricing = {
     monthly: { price: '$9.99', period: '/ month', savings: null },
@@ -234,10 +258,25 @@ export default function Paywall() {
           transition={{ delay: 0.3 }}
           className="space-y-3"
         >
-          <button className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold text-base py-4 rounded-full shadow-lg shadow-red-500/40 transition-all duration-200 active:scale-95">
-            Continue with Plus
+          {upgradeError && (
+            <div className="flex items-start gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-2xl">
+              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-red-400">{upgradeError}</p>
+            </div>
+          )}
+
+          <button
+            onClick={handleUpgrade}
+            disabled={isUpgrading}
+            className="w-full bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold text-base py-4 rounded-full shadow-lg shadow-red-500/40 transition-all duration-200 active:scale-95"
+          >
+            {isUpgrading
+              ? 'Processing...'
+              : subscription?.tier === 'plus'
+              ? 'You\'re already on Plus'
+              : 'Continue with Plus'}
           </button>
-          
+
           <button
             onClick={() => window.history.length > 1 ? navigate(-1) : navigate(createPageUrl('Home'), { replace: true })}
             className="w-full text-zinc-400 hover:text-white font-medium py-2 transition-colors text-sm"

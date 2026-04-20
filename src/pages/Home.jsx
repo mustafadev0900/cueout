@@ -12,6 +12,7 @@ import PersonaCard from '../components/PersonaCard';
 import VoiceCard from '../components/VoiceCard';
 import TimeChip from '../components/TimeChip';
 import UpcomingCallBanner from '../components/UpcomingCallBanner';
+import PullToRefresh from '../components/PullToRefresh';
 import ContactMethodSelector from '../components/ContactMethodSelector';
 import CallerIDSelector from '../components/CallerIDSelector';
 import { scheduleCall as scheduleCallAPI, getUserId } from '../api/luronApi';
@@ -33,7 +34,7 @@ export default function Home() {
   const location = useLocation();
   const topRef = useRef(null);
   const { getPersonaConfig, personas, addPersona } = usePersona();
-  const { upcomingCalls, addUpcomingCall, removeUpcomingCall, updateUpcomingCall, addToHistory, updateHistoryItem, updateHistoryStatus, syncPendingStatuses, setIsTabBarHidden } = useApp();
+  const { upcomingCalls, addUpcomingCall, removeUpcomingCall, updateUpcomingCall, addToHistory, updateHistoryItem, updateHistoryStatus, syncPendingStatuses, setIsTabBarHidden, checkCanSchedule, decrementUsage, subscription, isLoading: isAppLoading, loadData, refreshSubscription } = useApp();
   const { user } = useAuth();
   const [userPhone, setUserPhone] = useState(null);
 
@@ -60,6 +61,7 @@ export default function Home() {
   // Luron API Integration
   const [isScheduling, setIsScheduling] = useState(false);
   const [scheduleError, setScheduleError] = useState(null);
+  const [scheduleErrorIsLimit, setScheduleErrorIsLimit] = useState(false);
   const [showConfirmSchedule, setShowConfirmSchedule] = useState(false);
 
   const tips = [
@@ -201,6 +203,18 @@ export default function Home() {
 
     // Clear any previous errors
     setScheduleError(null);
+    setScheduleErrorIsLimit(false);
+
+    // ── Subscription enforcement ───────────────────────────────────────────────
+    // Skip check when editing (no new credit consumed for edits)
+    if (!editingCallId) {
+      const { allowed, reason, isUpgradePrompt } = checkCanSchedule(contactMethods);
+      if (!allowed) {
+        setScheduleError(reason);
+        setScheduleErrorIsLimit(!!isUpgradePrompt);
+        return;
+      }
+    }
 
     // Calculate duration in ms
     let durationMs = 0;
@@ -291,6 +305,9 @@ export default function Home() {
           }
         };
         const savedCall = await addUpcomingCall(newCall);
+
+        // Decrement usage counters (fire-and-forget — errors are logged internally)
+        contactMethods.forEach(method => decrementUsage(method));
 
         // Save history entry IMMEDIATELY (before Luron API) so history_id is
         // always available on the upcoming call before the timer could fire.
@@ -386,13 +403,11 @@ export default function Home() {
   };
 
   const handleCompleteCall = (call) => {
-    // Optimistically mark 'missed' immediately — instant feedback in History.
-    // Update the existing history record (preserves luron_call_id for sync).
-    // Fall back to insert if history_id not yet set (e.g. API still in flight).
+    // Update the existing history record to 'missed' (optimistic — syncPendingStatuses
+    // will correct to the real Luron outcome shortly after).
+    // Never insert here — doSchedule already created the history entry on schedule.
     if (call.history_id) {
       updateHistoryStatus(call.history_id, 'missed');
-    } else {
-      addToHistory({ ...call, status: 'missed' });
     }
     setTimeout(() => removeUpcomingCall(call.id), 3000);
 
@@ -461,7 +476,15 @@ export default function Home() {
     return 'at your custom time';
   };
 
+  const handleRefresh = async () => {
+    await Promise.all([
+      loadData().catch(() => {}),
+      refreshSubscription().catch(() => {}),
+    ]);
+  };
+
   return (
+    <PullToRefresh onRefresh={handleRefresh}>
     <div ref={topRef} className="min-h-full bg-black px-6 pt-safe pb-safe">
       <div className="fixed inset-0 bg-gradient-to-b from-red-950/10 via-black to-black pointer-events-none" />
 
@@ -473,17 +496,34 @@ export default function Home() {
               <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-lg shadow-red-500/50 animate-pulse" />
             </div>
 
+            {isAppLoading && !subscription ? (
+              /* Skeleton pill — shown only on first load before subscription data arrives */
+              <div className="flex items-center gap-2 bg-zinc-900/50 backdrop-blur-md border border-zinc-800 rounded-full py-1.5 pl-4 pr-3">
+                <div className="h-3 w-20 bg-zinc-700 rounded-full animate-pulse" />
+                <div className="h-3 w-12 bg-zinc-800 rounded-full animate-pulse" />
+              </div>
+            ) : (
             <button
-              onClick={() => navigate(createPageUrl('Paywall'))}
-              className="flex items-center gap-2 bg-zinc-900/50 backdrop-blur-md border border-green-500/50 hover:border-green-400 hover:bg-zinc-800/50 rounded-full py-1.5 pl-4 pr-1.5 transition-all group shadow-[0_0_15px_rgba(34,197,94,0.1)]">
-
+              onClick={() => navigate(createPageUrl(subscription?.tier === 'plus' ? 'Account' : 'Paywall'))}
+              className={`flex items-center gap-2 bg-zinc-900/50 backdrop-blur-md border rounded-full py-1.5 pl-4 pr-1.5 transition-all group ${
+                subscription?.tier === 'plus'
+                  ? 'border-red-500/40 hover:border-red-400 shadow-[0_0_15px_rgba(239,68,68,0.1)]'
+                  : 'border-green-500/50 hover:border-green-400 hover:bg-zinc-800/50 shadow-[0_0_15px_rgba(34,197,94,0.1)]'
+              }`}>
               <span className="text-xs font-medium text-zinc-200">
-                Free plan <span className="mx-2 text-zinc-700">|</span> <span className="text-red-400 font-semibold">1/2 calls left</span>
+                {subscription?.tier === 'plus' ? (
+                  <>Plus <span className="mx-2 text-zinc-700">|</span> <span className="text-green-400 font-semibold">{subscription.calls_remaining}/{subscription.calls_limit} left</span></>
+                ) : subscription ? (
+                  <>Free <span className="mx-2 text-zinc-700">|</span> <span className={`font-semibold ${subscription.calls_remaining === 0 ? 'text-red-400' : 'text-yellow-400'}`}>{subscription.calls_remaining}/{subscription.calls_limit} left</span></>
+                ) : (
+                  <>Free plan</>
+                )}
               </span>
               <div className="w-7 h-7 rounded-full bg-zinc-800 group-hover:bg-zinc-700 flex items-center justify-center border border-zinc-700 group-hover:border-zinc-600 transition-all">
                 <ChevronRight className="w-3.5 h-3.5 text-zinc-400" />
               </div>
             </button>
+            )}
           </div>
         </div>
 
@@ -713,8 +753,18 @@ export default function Home() {
             >
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
-                <p className="text-sm font-semibold text-red-400 mb-1">Scheduling Failed</p>
+                <p className="text-sm font-semibold text-red-400 mb-1">
+                  {scheduleErrorIsLimit ? 'Out of Credits' : 'Scheduling Failed'}
+                </p>
                 <p className="text-xs text-red-300/80">{scheduleError}</p>
+                {scheduleErrorIsLimit && (
+                  <button
+                    onClick={() => navigate(createPageUrl('Paywall'))}
+                    className="mt-2 px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-semibold rounded-full transition-colors"
+                  >
+                    Upgrade to Plus
+                  </button>
+                )}
               </div>
             </motion.div>
           )}
@@ -1031,6 +1081,7 @@ export default function Home() {
           );
         })()}
       </AnimatePresence>
-    </div>);
-
+    </div>
+    </PullToRefresh>
+  );
 }

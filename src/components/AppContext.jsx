@@ -19,8 +19,9 @@ import {
   updateQuickSchedule as updateSchedule,
   deleteQuickSchedule,
   promoteQuickSchedule as promoteSchedule,
-  initializeDefaultQuickSchedules,
-  isAuthenticated
+  isAuthenticated,
+  getSubscription as fetchSubscription,
+  decrementUsage as decrementUsageApi
 } from '../api';
 import { getHistory as fetchLuronHistory, getCallDetails, getUserId as getLuronUserId } from '../api/luronApi';
 import { useAuth } from './AuthContext';
@@ -51,6 +52,9 @@ export function AppProvider({ children }) {
   });
   const [quickSchedules, setQuickSchedules] = useState(() => {
     try { const s = localStorage.getItem('quickSchedules'); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+  const [subscription, setSubscription] = useState(() => {
+    try { const s = localStorage.getItem('subscription'); return s ? JSON.parse(s) : null; } catch { return null; }
   });
   const [unreadHistoryCount, setUnreadHistoryCount] = useState(0);
   const [isTabBarHidden, setIsTabBarHidden] = useState(false);
@@ -151,6 +155,7 @@ export function AppProvider({ children }) {
         setHistory([]);
         setCallerIDs([]);
         setQuickSchedules([]);
+        setSubscription(null);
         setUnreadHistoryCount(0);
         setIsAuthenticatedState(false);
         setApiError(null);
@@ -160,6 +165,7 @@ export function AppProvider({ children }) {
         localStorage.removeItem('callHistory');
         localStorage.removeItem('quickSchedules');
         localStorage.removeItem('callerIDs_v3');
+        localStorage.removeItem('subscription');
       }
     });
 
@@ -182,7 +188,7 @@ export function AppProvider({ children }) {
       }
 
       // Load all data in parallel
-      const [calls, historyData, callerIdsData, schedulesData, unreadCount] = await Promise.all([
+      const [calls, historyData, callerIdsData, schedulesData, unreadCount, subData] = await Promise.all([
         fetchUpcomingCalls().catch(() => []),
         fetchCallHistory().catch(() => []),
         fetchCallerIds().then(async (data) => {
@@ -192,14 +198,9 @@ export function AppProvider({ children }) {
           }
           return data;
         }).catch(() => []),
-        fetchQuickSchedules().then(async (data) => {
-          if (data.length === 0) {
-            await initializeDefaultQuickSchedules().catch(() => {});
-            return fetchQuickSchedules().catch(() => []);
-          }
-          return data;
-        }).catch(() => []),
-        fetchUnreadCount().catch(() => 0)
+        fetchQuickSchedules().catch(() => []),
+        fetchUnreadCount().catch(() => 0),
+        fetchSubscription().catch(() => null)
       ]);
 
       setUpcomingCalls(prev => {
@@ -210,6 +211,8 @@ export function AppProvider({ children }) {
       setCallerIDs(callerIdsData);
       setQuickSchedules(schedulesData.map(normalizeQuickSchedule));
       setUnreadHistoryCount(unreadCount);
+      setSubscription(subData);
+      if (subData) localStorage.setItem('subscription', JSON.stringify(subData));
     } catch (error) {
       console.error('Error loading data:', error);
       // Fall back to localStorage on error
@@ -426,39 +429,41 @@ export function AppProvider({ children }) {
       console.error('syncPendingStatuses: Luron fetch failed', e);
     }
 
-    const updates = [];
-
-    for (const call of pending) {
-      let luronData = null;
-
-      // 1. Match by stored luron_call_id (most reliable)
-      if (call.luron_call_id) {
-        if (luronById[call.luron_call_id]) {
-          luronData = luronById[call.luron_call_id];
-        } else {
-          // Try direct call detail lookup
-          try {
-            const r = await getCallDetails(call.luron_call_id);
-            if (r.success && r.data) luronData = r.data;
-          } catch { /* ignore */ }
+    // Fix 3: Resolve all calls in parallel instead of sequentially
+    const resolvedCalls = await Promise.allSettled(
+      pending.map(async (call) => {
+        let luronData = null;
+        if (call.luron_call_id) {
+          if (luronById[call.luron_call_id]) {
+            luronData = luronById[call.luron_call_id];
+          } else {
+            try {
+              const r = await getCallDetails(call.luron_call_id);
+              if (r.success && r.data) luronData = r.data;
+            } catch { /* ignore */ }
+          }
         }
-      }
+        return { call, luronData };
+      })
+    );
 
-      // Time-based fallback intentionally removed — causes false positives when
-      // multiple calls exist within the same time window.
+    const updates = [];
+    for (const result of resolvedCalls) {
+      if (result.status !== 'fulfilled') continue;
+      const { call, luronData } = result.value;
 
       if (!luronData) {
         console.log('⚠️ syncPendingStatuses: no match for call', call.id, '| luron_call_id:', call.luron_call_id ?? 'NULL');
         continue;
       }
 
-      console.log('🔍 syncPendingStatuses: matched call', call.id, '| status:', luronData.status, '| voicemail?', (luronData.call_context || '').toLowerCase().includes('voicemail') || (luronData.call_context || '').toLowerCase().includes('leave a message'));
-      const mapped = mapLuronStatus(luronData); // pass full object for call_context check
+      console.log('🔍 syncPendingStatuses: matched call', call.id, '| status:', luronData.status);
+      const mapped = mapLuronStatus(luronData);
       if (!mapped) {
         console.log('⏳ syncPendingStatuses: status not final yet (', luronData.status, ') — skipping');
         continue;
       }
-      if (mapped === call.status) continue; // no change needed
+      if (mapped === call.status) continue;
 
       updates.push({
         id: call.id,
@@ -637,6 +642,61 @@ export function AppProvider({ children }) {
     icon:    cached?.icon    || serverCall.icon    || getPersonaIconStatic(serverCall.persona_id),
   });
 
+  // Returns { allowed: true } or { allowed: false, reason, isUpgradePrompt }
+  // Single shared pool: calls_remaining covers ALL method types (call + text + email).
+  const checkCanSchedule = (contactMethods) => {
+    if (!subscription) {
+      return {
+        allowed: false,
+        reason: 'No active plan found. Please restart the app or contact support.',
+        isUpgradePrompt: false,
+      };
+    }
+
+    if (subscription.calls_remaining <= 0) {
+      const isPlus = subscription.tier === 'plus';
+      return {
+        allowed: false,
+        reason: isPlus
+          ? `You've used all ${subscription.calls_limit} schedules for this period. They'll reset on renewal.`
+          : `You've used all ${subscription.calls_limit} free schedules. Upgrade to Plus for 20 per month.`,
+        isUpgradePrompt: !isPlus,
+      };
+    }
+
+    return { allowed: true };
+  };
+
+  // Decrement the shared calls_remaining counter for all method types.
+  // Fire-and-forget safe — errors are caught and logged.
+  const decrementUsage = async (methodType) => {
+    try {
+      await decrementUsageApi('call'); // always decrement calls_remaining (shared pool)
+      setSubscription(prev => {
+        if (!prev) return prev;
+        const updated = { ...prev, calls_remaining: Math.max(0, (prev.calls_remaining ?? 0) - 1) };
+        localStorage.setItem('subscription', JSON.stringify(updated));
+        return updated;
+      });
+    } catch (e) {
+      console.error('Failed to decrement usage:', e);
+      refreshSubscription().catch(() => {});
+    }
+  };
+
+  const refreshSubscription = async () => {
+    try {
+      const sub = await fetchSubscription();
+      setSubscription(sub);
+      if (sub) localStorage.setItem('subscription', JSON.stringify(sub));
+      else localStorage.removeItem('subscription');
+      return sub;
+    } catch (e) {
+      console.error('Error refreshing subscription:', e);
+      return subscription;
+    }
+  };
+
   return (
     <AppContext.Provider value={{
       // Data
@@ -644,6 +704,7 @@ export function AppProvider({ children }) {
       history,
       quickSchedules,
       callerIDs,
+      subscription,
       unreadHistoryCount,
 
       // UI State
@@ -681,6 +742,11 @@ export function AppProvider({ children }) {
 
       // Caller IDs
       updateCallerIDName,
+
+      // Subscription
+      refreshSubscription,
+      checkCanSchedule,
+      decrementUsage,
 
       // Utilities
       loadData

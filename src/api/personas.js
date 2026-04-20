@@ -21,7 +21,14 @@ export const getPersona = (personaId) =>
 export const createPersona = (persona) =>
   withAuth((userId) =>
     supabaseQuery(() =>
-      supabase.from('personas').insert([{ ...persona, user_id: userId, is_default: false }]).select().single()
+      supabase.from('personas').insert([{
+        id: persona.id,
+        user_id: userId,
+        name: persona.name,
+        icon: persona.icon,
+        color: persona.color,
+        is_default: false,
+      }]).select().single()
     )
   );
 
